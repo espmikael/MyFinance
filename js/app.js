@@ -32,6 +32,7 @@ const state = {
   view: 'home',
   filter: 'all',
   incomeMonth: null,     // 'YYYY-MM' na tela de entradas
+  month: null,           // 'YYYY-MM' no bloco do mês do painel
   busy: false,
 };
 let sb = null;
@@ -92,6 +93,27 @@ async function loadAll() {
   if (!state.rules.length) state.rules = await q(sb.from('rules').insert(L.DEFAULT_RULES).select('id,keyword,category'));
 
   await Promise.all([loadTxs(), loadSmall()]);
+  if (s && (s.data.version || 1) < 2) await migrateV2(s.data);
+}
+
+// Uma vez só: troca as categorias antigas pelas rubricas da planilha (regras, compras classificadas e ajustes).
+async function migrateV2(raw) {
+  for (const r of state.rules) {
+    const to = L.migrateCategory(r.category, r.keyword);
+    if (to === undefined) continue;
+    if (to === null) await sb.from('rules').delete().eq('id', r.id);
+    else await sb.from('rules').update({ category: to }).eq('id', r.id);
+  }
+  const have = new Set(state.rules.map(r => L.normalize(r.keyword)));
+  const missing = L.DEFAULT_RULES.filter(r => !have.has(L.normalize(r.keyword)));
+  if (missing.length) await sb.from('rules').insert(missing);
+  for (const t of state.txs) {
+    const to = L.migrateCategory(t.category, t.title);
+    if (to !== undefined) await sb.from('transactions').update({ category: to }).eq('id', t.id);
+  }
+  await saveSettings(L.migrateSettings(raw));
+  state.rules = await q(sb.from('rules').select('id,keyword,category').order('id'));
+  await loadTxs();
 }
 
 async function loadTxs() {
@@ -165,7 +187,7 @@ function render() {
 }
 
 function summary(cycle) {
-  return L.summarize({ txs: state.txs, rules: state.rules, settings: state.settings, cycle, today: today() });
+  return L.summarize({ txs: state.txs, rules: state.rules, settings: state.settings, cycle, today: today(), incomes: state.incomes });
 }
 
 function cycleRow(s) {
@@ -198,19 +220,24 @@ function viewHome(s) {
 
   const facts = [
     ['Gasto no ciclo', money(s.spent)],
-    ['Soma dos tetos', money(s.budget)],
+    ['Plano (tetos + fixos)', money(s.budget)],
     s.isCurrent ? ['Projeção até fechar', money(s.projected)] : [s.overBudget > 0 ? 'Passou dos tetos' : 'Abaixo dos tetos', money(Math.abs(s.overBudget))],
-    ['Disponível p/ gastar', hasIncome ? money(s.available) : '—'],
+    ['Entradas − fixos', hasIncome ? money(s.available) : '—'],
   ];
 
   const rows = s.rows.map(r => {
     const w = Math.min(100, Math.round(r.pct * 100));
     let right;
-    if (r.fixed) right = `<span class="tag">fixo</span>`;
-    else if (r.status === 'over') right = `<span class="wk over">teto estourado</span>`;
+    const fx = r.linked ? `fixos ${r.unpaidLinked ? `· ${money(r.unpaidLinked)} a pagar` : 'pagos'}` : '';
+    if (r.status === 'over' && r.varBudget > 0) right = `<span class="wk over">teto estourado</span>`;
     else if (r.perWeek != null) right = `<span class="wk ${r.status === 'warn' ? 'warn' : ''}">${r.status === 'warn' ? 'acima do ritmo · ' : ''}${money(r.perWeek)} por semana</span>`;
+    else if (fx) right = `<span class="tag">${fx}</span>`;
+    else if (r.fixed) right = `<span class="tag">fixo</span>`;
     else right = '';
-    return `<li><div class="r1"><span class="name">${esc(r.name)}</span><span class="left ${r.left < 0 ? 'over' : ''}">${signed(r.left)}</span></div>
+    const onlyFixed = r.varBudget === 0 && r.linked > 0 && r.varSpent <= 0;
+    if (onlyFixed) right = `<span class="tag">fixo</span>`;
+    const leftTxt = onlyFixed ? (r.unpaidLinked ? `${money(r.unpaidLinked)} a pagar` : 'pago') : signed(r.left);
+    return `<li><div class="r1"><span class="name">${esc(r.name)}</span><span class="left ${!onlyFixed && r.left < 0 ? 'over' : ''}">${leftTxt}</span></div>
       <div class="meter" role="img" aria-label="${pct(r.pct)} do teto"><span class="${r.status === 'ok' ? '' : r.status}" style="width:${w}%"></span></div>
       <div class="r2"><span>${money(r.spent)} de ${money(r.budget)}</span>${right}</div></li>`;
   }).join('');
@@ -227,7 +254,7 @@ function viewHome(s) {
       <div class="facts">${facts.map(([k, v]) => `<div><span>${k}</span><b>${v}</b></div>`).join('')}</div>
     </section>
     ${s.toClassify.length ? `<div class="notice"><span>${s.toClassify.length === 1 ? '1 compra sem categoria' : `${s.toClassify.length} compras sem categoria`}</span><button class="btn primary small" data-act="classify">Classificar</button></div>` : ''}
-    ${!hasIncome ? `<div class="notice"><span>Informe suas entradas e fixos para ver a sobra do mês.</span><button class="btn small" data-act="view" data-v="entradas">Entradas</button></div>` : ''}
+    ${!hasIncome ? `<div class="notice"><span>Informe suas entradas para ver a sobra do mês.</span><button class="btn small" data-act="inc-edit">Entradas</button></div>` : ''}
     <h2 class="h2">Quanto resta</h2>
     <ul class="ledger two">${rows}</ul>`;
 }
@@ -244,7 +271,7 @@ function viewGastos(s) {
 
   const chip = (id, label, extra = '') => `<button class="chip ${extra}" data-act="filter" data-f="${esc(id)}" aria-pressed="${f === id}">${label}</button>`;
   let html = `<h1 class="page-title">Gastos do ciclo</h1>
-    <div class="k" style="margin-top:4px">${s.txs.length} ${s.txs.length === 1 ? 'lançamento' : 'lançamentos'} · ${money(s.spent)}</div>
+    <div class="k" style="margin-top:4px">${s.txs.length} ${s.txs.length === 1 ? 'lançamento' : 'lançamentos'} · ${money(s.txs.filter(t => t.cat !== L.IGNORE).reduce((a, t) => a + t.amount, 0))}</div>
     ${cycleRow(s)}
     <div class="chips" role="toolbar" aria-label="Filtrar">
       ${chip('all', 'Todos', 'all')}
@@ -257,7 +284,7 @@ function viewGastos(s) {
   for (const t of list) {
     if (t.date !== lastDay) { html += `<div class="day">${longDay(t.date)}</div>`; lastDay = t.date; }
     const isUnc = !known.has(t.cat);
-    const sub = isUnc ? 'Sem categoria · toque para classificar' : `${t.cat === L.IGNORE ? 'Ignorado' : esc(t.cat)} · ${esc(sourceName(t.source))}${t.manual ? ' · à mão' : ''}`;
+    const sub = isUnc ? 'Sem categoria · toque para classificar' : `${t.cat === L.IGNORE ? 'Ignorado' : esc(t.cat)} · ${esc(sourceName(t.source))}${t.isFixed ? ` · fixo de ${L.MONTHS[+t.date.slice(5, 7) - 1]}` : t.manual ? ' · à mão' : ''}`;
     html += `<button class="tx ${t.cat === L.IGNORE ? 'ign' : ''}" data-act="tx" data-id="${t.id}">
       <span class="t"><span>${esc(t.title)}</span><span class="c ${isUnc ? 'unc' : ''}">${sub}</span></span>
       <span class="v ${t.amount < 0 ? 'pos' : ''}">${signed(t.amount)}</span></button>`;
@@ -281,11 +308,11 @@ function lineChart(s, W, H, mobile) {
   const pts = s.cumulative.filter(p => !p.future);
   const n = s.cumulative.length;
   const last = pts.length ? pts[pts.length - 1].value : 0;
-  const max = niceMax(Math.max(last, s.budget) * 1.06);
+  const max = niceMax(Math.max(last, s.varBudget) * 1.06);
   const X = i => (n > 1 ? (i / (n - 1)) * W : 0);
   const Y = v => H - (Math.max(0, v) / max) * H;
   const poly = pts.map((p, i) => `${X(i).toFixed(1)},${Y(p.value).toFixed(1)}`).join(' ');
-  const by = Y(s.budget);
+  const by = Y(s.varBudget);
   const fs = mobile ? 11 : 12;
   const vb = mobile ? `-2 -${fs + 6} ${W + 4} ${H + fs * 2 + 16}` : `-62 -16 ${W + 70} ${H + 46}`;
   const ylabels = mobile
@@ -302,7 +329,7 @@ function lineChart(s, W, H, mobile) {
   const data = esc(JSON.stringify({ W, H, n, max, vals: pts.map(p => p.value), dates: pts.map(p => p.date) }));
   return `<svg viewBox="${vb}" data-chart="${data}" role="img" aria-label="Gasto acumulado no ciclo: ${money(last)}${s.overDay ? `, passou da soma dos tetos em ${L.ddmm(s.overDay.date)}` : ''}">
     ${grid}${ylabels}
-    ${s.budget > 0 ? `<line class="ref" x1="0" x2="${W}" y1="${by}" y2="${by}"></line>` : ''}
+    ${s.varBudget > 0 ? `<line class="ref" x1="0" x2="${W}" y1="${by}" y2="${by}"></line>` : ''}
     <polyline class="ln" points="${poly}"></polyline>
     ${over}${end}
     <line class="cross" x1="0" x2="0" y1="0" y2="${H}" style="display:none"></line>
@@ -312,15 +339,70 @@ function lineChart(s, W, H, mobile) {
   </svg>`;
 }
 
+// ciclo cuja fatura vence no mês ym (fatura de novembro = ciclo 3/10–2/11)
+function cycleForMonth(ym) {
+  const closing = card().closing || 1;
+  let c = L.cycleFor(`${ym}-15`, closing);
+  for (let i = 0; i < 4 && L.monthOfCycle(c, state.settings) !== ym; i++)
+    c = L.shiftCycle(c.start, L.monthOfCycle(c, state.settings) > ym ? -1 : 1, closing);
+  return c;
+}
+const monthName = ym => L.MONTHS[+ym.slice(5, 7) - 1].replace(/^./, ch => ch.toUpperCase()) + (ym.slice(0, 4) === today().slice(0, 4) ? '' : ` de ${ym.slice(0, 4)}`);
+
+function monthBlock() {
+  const ym = state.month || today().slice(0, 7);
+  const m = summary(cycleForMonth(ym));
+  const c = card();
+  const due = L.dueDateFor(m.cycle, c);
+  const open = m.isCurrent;
+  const canPay = ym <= today().slice(0, 7);
+  const inc = m.incomeItems.map(i => `<div class="mrow">
+      <span class="mn"><span>${esc(i.name)}</span><small>${L.ddmm(i.date)} · ${i.extra ? 'avulsa' : i.received ? 'recebida' : 'prevista'}</small></span>
+      <b class="${i.received ? '' : 'muted'}">${money(i.amount)}</b></div>`).join('');
+  const fix = m.fixedItems.map(f => `<div class="mrow">
+      <span class="mn"><span>${esc(f.name)}</span><small>${esc(f.category || 'sem rubrica')}</small></span>
+      <span class="mv"><b class="${f.paid ? '' : 'muted'}">${money(f.paid ? f.paidAmount : f.value)}</b>
+      ${f.paid ? `<button class="pill ok" data-act="fix-unpay" data-id="${f.tx.id}" aria-label="${esc(f.name)} pago. Tocar para ver">pago ✓</button>`
+        : canPay ? `<button class="pill" data-act="fix-pay" data-i="${f.index}" data-ym="${ym}">marcar pago</button>` : `<span class="pill ghost">a pagar</span>`}</span></div>`).join('');
+  const sobra = open ? m.leftover : m.result;
+  return `<section class="card full month">
+    <div class="mhead">
+      <button class="icon-btn sm" data-act="month" data-d="-1" aria-label="Mês anterior">‹</button>
+      <div><b>${monthName(ym)}</b><small>entradas, fixos e a fatura que vence ${L.ddmm(due)}</small></div>
+      <button class="icon-btn sm" data-act="month" data-d="1" aria-label="Próximo mês">›</button>
+    </div>
+    <div class="mgrid">
+      <div class="mcol">
+        <div class="mtitle"><span>Entradas</span><b>${money(m.income)}</b></div>
+        ${inc || '<p class="help">Nenhuma entrada.</p>'}
+        <div class="mact"><button class="btn small soft" data-act="inc-add" data-ym="${ym}">+ Recebimento</button><button class="btn small ghost" data-act="inc-edit" data-ym="${ym}">Editar valores</button></div>
+      </div>
+      <div class="mcol">
+        <div class="mtitle"><span>Fixos</span><b>${money(m.fixedCost)}</b></div>
+        ${fix || '<p class="help">Nenhum fixo. Aluguel, mestrado, plano do celular…</p>'}
+        <div class="mact"><button class="btn small ghost" data-act="fix-edit">Editar fixos</button></div>
+      </div>
+      <div class="mcol">
+        <div class="mtitle"><span>A conta</span></div>
+        <div class="mrow"><span class="mn"><span>Entradas</span></span><b>${money(m.income)}</b></div>
+        <div class="mrow"><span class="mn"><span>Fixos</span></span><b>− ${money(m.fixedCost)}</b></div>
+        <div class="mrow"><span class="mn"><span>${L.invoiceName(m.cycle, c, today())}</span><small>${open ? 'em aberto · projeção até fechar' : 'gastos do ciclo'} ${L.dayMonth(m.cycle.start)}–${L.dayMonth(m.cycle.end)}</small></span><b>− ${money(open ? m.varProjected : m.varSpent)}</b></div>
+        <div class="mrow total"><span class="mn"><span>${open ? 'Sobra prevista' : 'Sobra do mês'}</span></span><b class="${sobra < 0 ? 'neg' : 'pos'}">${signed(sobra)}</b></div>
+        ${m.income <= 0 ? '<p class="help small">Sem entradas neste mês: informe em "Editar valores".</p>' : ''}
+      </div>
+    </div>
+  </section>`;
+}
+
 function viewPainel(s) {
-  const prevC = L.shiftCycle(s.cycle.start, -1, card().closing || 1);
-  const prevTotal = L.cycleTotal(state.txs, state.rules, prevC);
-  const diff = prevTotal > 0 ? (s.spent - prevTotal) / prevTotal : null;
+  const prev = summary(L.shiftCycle(s.cycle.start, -1, card().closing || 1));
+  const prevTotal = prev.varSpent;
+  const diff = prevTotal > 0 ? (s.varSpent - prevTotal) / prevTotal : null;
   const kpis = [
-    ['Gasto no ciclo', money(s.spent), ''],
+    ['Gasto no ciclo', money(s.varSpent), 'sem os fixos'],
     [s.overBudget > 0 ? 'Acima dos tetos' : 'Abaixo dos tetos', money(Math.abs(s.overBudget)), '', s.overBudget > 0 ? 'neg' : ''],
-    ['Disponível para gastar', s.income > 0 ? money(s.available) : '—', s.income > 0 ? '' : 'informe as entradas'],
-    ['Fatura anterior', prevTotal > 0 ? money(prevTotal) : '—', diff != null ? `este ciclo: ${diff >= 0 ? '+' : '−'}${pct(Math.abs(diff))}` : 'sem dados'],
+    [s.isCurrent ? 'Sobra prevista' : 'Sobra', s.income > 0 ? signed(s.isCurrent ? s.leftover : s.result) : '—', s.income > 0 ? `com as entradas de ${L.MONTHS[+s.month.slice(5, 7) - 1]}` : 'informe as entradas', (s.isCurrent ? s.leftover : s.result) < 0 && s.income > 0 ? 'neg' : ''],
+    ['Ciclo anterior', prevTotal > 0 ? money(prevTotal) : '—', diff != null && s.varSpent > 0 ? `este ciclo: ${diff >= 0 ? '+' : '−'}${pct(Math.abs(diff))}` : prevTotal > 0 ? 'fatura passada' : 'sem dados'],
   ];
 
   const maxBar = Math.max(1, ...s.rows.map(r => Math.max(r.spent, r.budget))) * 1.05;
@@ -337,17 +419,19 @@ function viewPainel(s) {
     const v = s.bySource[x.id];
     return `<div class="list-row ${v ? '' : 'muted'}"><span style="display:flex;align-items:center;gap:10px"><span class="dot" style="background:${x.color}"></span>${esc(x.name)}</span><span>${v ? `<b>${money(v)}</b>` : (x.card ? 'sem fatura' : 'nada lançado')}</span></div>`;
   }).join('');
-  const top = s.topMerchants.map(m => `<div class="list-row"><span>${esc(m.label)} <span class="muted small">${m.count} ${m.count === 1 ? 'compra' : 'compras'}</span></span><b>${money(m.total)}</b></div>`).join('');
+  const top = s.topMerchants.map(m => `<div class="list-row"><span>${esc(m.label)}</span><b>${money(m.total)}</b></div>`).join('');
 
   return `<div style="display:flex;justify-content:space-between;align-items:flex-end;gap:12px;flex-wrap:wrap">
       <h1 class="page-title">Painel</h1></div>
+    <div class="dash" style="margin-top:12px">${monthBlock()}</div>
+    <h2 class="h2" style="margin-top:26px">Ciclo do cartão</h2>
     ${cycleRow(s)}
     <div class="kpis">${kpis.map(([k, v, sm, cls]) => `<div><span class="kl">${k}</span><b class="${cls || ''}">${v}</b>${sm ? `<small>${sm}</small>` : ''}</div>`).join('')}</div>
     ${!s.txs.length ? `<p class="help" style="margin-top:20px">Ainda não há gastos neste ciclo.</p>` : `
     <div class="dash" style="margin-top:16px">
       <section class="card">
         <h2 class="h2" style="margin-top:0">Ritmo do ciclo</h2>
-        <div class="legend"><span><span class="sw-line"></span>Gasto acumulado</span>${s.budget > 0 ? `<span><span class="sw-dash"></span>Soma dos tetos · ${money(s.budget)}</span>` : ''}</div>
+        <div class="legend"><span><span class="sw-line"></span>Gasto acumulado (sem fixos)</span>${s.varBudget > 0 ? `<span><span class="sw-dash"></span>Soma dos tetos · ${money(s.varBudget)}</span>` : ''}</div>
         <div class="chart only-mob">${lineChart(s, 340, 150, true)}<div class="tip"></div></div>
         <div class="chart only-desk">${lineChart(s, 720, 220, false)}<div class="tip"></div></div>
       </section>
@@ -359,8 +443,8 @@ function viewPainel(s) {
         ${top || '<p class="help">Nada ainda.</p>'}
       </section>
       <section class="card full">
-        <h2 class="h2" style="margin-top:0">Por categoria</h2>
-        <div class="legend"><span><span class="sw-bar"></span>Gasto</span><span><span class="sw-tick"></span>Teto</span></div>
+        <h2 class="h2" style="margin-top:0">Por rubrica</h2>
+        <div class="legend"><span><span class="sw-bar"></span>Gasto</span><span><span class="sw-tick"></span>Teto + fixos</span></div>
         <div class="bars">${bars}</div>
       </section>
     </div>`}`;
@@ -455,14 +539,21 @@ function viewReservas() {
 // ----- Ajustes -----
 function startDraft() { state.draft = structuredClone(state.settings); }
 
+function fixedRowHTML(f, i, cats, path) {
+  const names = cats.map(c => c.name);
+  const opts = (names.includes(f.category) ? names : [f.category || '—', ...names]).map(n => `<option ${n === f.category ? 'selected' : ''}>${esc(n)}</option>`).join('');
+  return `<div class="edit-row fixed-row">
+      <input class="input" data-bind="${path}.${i}.name" value="${esc(f.name)}" aria-label="Nome do gasto fixo" placeholder="ex.: aluguel">
+      <input class="input" data-bind="${path}.${i}.value" data-type="money" inputmode="decimal" value="${fmtIn(f.value)}" aria-label="Valor" placeholder="valor">
+      <select class="input" data-bind="${path}.${i}.category" aria-label="Rubrica">${opts}</select>
+      <button class="icon-btn sm" data-act="del" data-path="${path}" data-i="${i}" aria-label="Remover">×</button></div>`;
+}
+
 function viewAjustes() {
   if (!state.draft) startDraft();
   const d = state.draft;
   const income = (state.settings.incomeRules || []).reduce((s, r) => s + (Number(r.amount) || 0), 0);
-  const fixed = (d.fixed || []).map((f, i) => `<div class="edit-row">
-      <input class="input" data-bind="fixed.${i}.name" value="${esc(f.name)}" aria-label="Nome do gasto fixo" placeholder="ex.: aluguel">
-      <input class="input" data-bind="fixed.${i}.value" data-type="money" inputmode="decimal" value="${fmtIn(f.value)}" aria-label="Valor">
-      <button class="icon-btn sm" data-act="del" data-path="fixed" data-i="${i}" aria-label="Remover">×</button></div>`).join('');
+  const fixed = (d.fixed || []).map((f, i) => fixedRowHTML(f, i, d.categories, 'fixed')).join('');
   const cards = d.cards.map((c, i) => `<div class="edit-row card">
       <input class="input" data-bind="cards.${i}.name" value="${esc(c.name)}" aria-label="Nome do cartão">
       <input class="input" data-bind="cards.${i}.closing" data-type="int" inputmode="numeric" value="${c.closing ?? ''}" aria-label="Dia do fechamento" placeholder="fecha">
@@ -481,6 +572,7 @@ function viewAjustes() {
     <h2 class="h2">O mês</h2>
     <button class="row" data-act="view" data-v="entradas"><span>Entradas · salário e vintena</span><span class="end"><b style="color:var(--text)">${income ? money(income) : 'informar'}</b> ›</span></button>
     <div class="lbl" style="margin-top:14px">Gastos fixos fora do cartão</div>
+    <p class="help small" style="margin-top:2px">Cada fixo entra na rubrica escolhida. Quando você pagar (no Painel, "marcar pago", ou lançando com o mesmo nome), ele não é contado duas vezes.</p>
     ${fixed}
     <button class="row add" data-act="add" data-path="fixed">Adicionar gasto fixo</button>
 
@@ -489,8 +581,8 @@ function viewAjustes() {
     ${cards}
     <button class="row add" data-act="add" data-path="cards">Adicionar cartão (ex.: Renner)</button>
 
-    <h2 class="h2">Tetos do cartão</h2>
-    <p class="help">"Fixo" é o que não varia no mês (assinaturas, luz, parcelas): fica fora do "por semana".</p>
+    <h2 class="h2">Rubricas e tetos</h2>
+    <p class="help">O teto é o que você pode gastar variando (cartão, Pix, à mão). Os fixos da rubrica somam por cima. Marque "fixo" na rubrica que não varia no mês: ela fica fora do "por semana".</p>
     ${cats}
     <button class="row add" data-act="add" data-path="categories">Adicionar categoria</button>
 
@@ -631,8 +723,35 @@ document.addEventListener('click', async e => {
     case 'account-new': return accountSheet(null, el.dataset.kind);
     case 'aporte': return aporteSheet();
     case 'saldos': return saldosSheet();
+    case 'month': {
+      const base = (state.month || today().slice(0, 7)) + '-01';
+      state.month = L.addMonths(base, Number(el.dataset.d)).slice(0, 7); return render();
+    }
+    case 'inc-add': return lancarSheet('entrada', dateInMonth(el.dataset.ym));
+    case 'inc-edit': return incomeEditSheet(el.dataset.ym || L.monthOfCycle(state.cycle, state.settings));
+    case 'fix-edit': return fixedSheet();
+    case 'fix-pay': return payFixed(Number(el.dataset.i), el.dataset.ym);
+    case 'fix-unpay': return txSheet(Number(el.dataset.id));
   }
 });
+
+// data padrão para um lançamento do mês ym: hoje, se for o mês atual; senão o 1º (ou o último, se já passou)
+function dateInMonth(ym) {
+  const t = today();
+  if (!ym || t.slice(0, 7) === ym) return t;
+  if (ym > t.slice(0, 7)) return `${ym}-01`;
+  return L.addDays(L.addMonths(`${ym}-01`, 1), -1);
+}
+
+async function payFixed(i, ym) {
+  const f = (state.settings.fixed || [])[i];
+  if (!f) return;
+  const row = { user_id: state.user.id, uid: `fixed|${i}|${ym}|${Date.now().toString(36)}`, date: dateInMonth(ym), title: f.name,
+    amount: Number(f.value) || 0, source: 'pix', category: f.category || null, manual: true };
+  const { error } = await sb.from('transactions').insert(row);
+  if (error) return toast('Não salvou: ' + error.message);
+  await loadTxs(); render(); toast(`${f.name} marcado como pago (Pix, ${money(row.amount)}). Toque nele para mudar.`);
+}
 
 // edição dos ajustes: cada campo escreve direto no rascunho
 document.addEventListener('input', e => bindInput(e.target));
@@ -657,7 +776,7 @@ function bindInput(el) {
 const PALETTE = ['#e66767', '#3987e5', '#c98500', '#d55181', '#199e70'];
 function addDraftRow(path) {
   const d = state.draft;
-  if (path === 'fixed') d.fixed.push({ name: '', value: 0 });
+  if (path === 'fixed') d.fixed.push({ name: '', value: 0, category: 'Casa' });
   if (path === 'categories') d.categories.push({ name: 'Nova categoria', budget: 0, fixed: false });
   if (path === 'cards') {
     const name = 'Novo cartão';
@@ -819,13 +938,13 @@ function uploadSheet(fileName, parsed) {
 }
 
 // ----- Lançar gasto ou entrada -----
-function lancarSheet(mode) {
+function lancarSheet(mode, dateDefault) {
   const srcs = [...L.METHODS, ...state.settings.cards.map(c => ({ id: c.id, name: c.name, color: c.color }))];
   const rules = state.settings.incomeRules || [];
   const html = `<div class="head"><h2>Lançar</h2>
       <div class="seg" role="group" aria-label="Tipo de lançamento"><button data-mode="gasto" aria-pressed="${mode === 'gasto'}">Gasto</button><button data-mode="entrada" aria-pressed="${mode === 'entrada'}">Entrada</button></div></div>
     <div class="field"><label for="lv">Valor</label><div class="money"><span>R$</span><input id="lv" inputmode="decimal" placeholder="0,00" autofocus></div></div>
-    <div class="field"><label for="ld">Descrição</label><input class="input" id="ld" placeholder="ex.: almoço, Renner, freela"></div>
+    <div class="field"><label for="ld">Descrição</label><input class="input" id="ld" placeholder="${mode === 'entrada' ? 'ex.: 13º salário, freela, reembolso' : 'ex.: almoço, Renner, mestrado'}"></div>
     <div data-g>
       <div class="lbl" style="margin-top:14px">Como pagou</div>
       <div class="wrapchips">${srcs.map((s, i) => `<button class="chip" data-src="${esc(s.id)}" aria-pressed="${i === 0}"><span class="dot" style="background:${s.color}"></span>${esc(s.name)}</button>`).join('')}</div>
@@ -837,7 +956,7 @@ function lancarSheet(mode) {
       <div class="wrapchips"><button class="chip" data-rk="" aria-pressed="true">Avulsa</button>${rules.map(r => `<button class="chip" data-rk="${esc(r.key)}" aria-pressed="false">${esc(r.name)}</button>`).join('')}</div>
     </div>
     <div class="grid2">
-      <div class="field"><label for="ldt">Data</label><input class="input" id="ldt" type="date" value="${today()}"></div>
+      <div class="field"><label for="ldt">Data</label><input class="input" id="ldt" type="date" value="${dateDefault || today()}"></div>
       <div class="field" data-g><label for="lp">Parcelas</label><input class="input" id="lp" type="number" min="1" max="24" value="1"></div>
     </div>
     <div class="err" data-err></div>
@@ -933,6 +1052,64 @@ function txSheet(id) {
         t.category = chosen; toast('Categoria alterada.');
       }
       close(); render();
+    });
+  });
+}
+
+// ----- Entradas do mês (editar valores) -----
+function incomeEditSheet(ym) {
+  const rules = state.settings.incomeRules || [];
+  const items = L.monthIncomes(state.settings, state.incomes, ym).items;
+  const extras = items.filter(i => i.extra);
+  const html = `<h2>Entradas de ${monthName(ym).toLowerCase()}</h2>
+    <div class="meta">Valor esperado de cada entrada fixa. Fica salvo para os próximos meses.</div>
+    ${rules.map((r, i) => {
+      const it = items.find(x => x.key === r.key);
+      return `<div class="field"><label for="ir${i}">${esc(r.name)} <span class="muted small">· ${it ? L.ddmm(it.date) : ''}${it && it.received ? ` · caiu ${money(it.amount)}` : ''}</span></label>
+        <div class="money"><span>R$</span><input id="ir${i}" data-i="${i}" inputmode="decimal" value="${fmtIn(r.amount)}" placeholder="0,00"></div></div>`;
+    }).join('') || '<p class="help">Nenhuma entrada fixa ainda.</p>'}
+    ${extras.length ? `<div class="lbl" style="margin-top:16px">Avulsas neste mês</div>${extras.map(e => `<div class="list-row"><span>${esc(e.name)} <span class="muted small">${L.ddmm(e.date)}</span></span><span style="display:flex;gap:10px;align-items:center"><b>${money(e.amount)}</b><button class="icon-btn sm" data-del="${e.id}" aria-label="Apagar ${esc(e.name)}">×</button></span></div>`).join('')}` : ''}
+    <div class="actions" style="margin-top:12px"><button class="btn small soft" data-add>+ Recebimento avulso (13º, freela…)</button><button class="btn small ghost" data-more>Datas e novas entradas fixas</button></div>
+    <div class="err" data-err></div>
+    <div class="actions"><button class="btn primary grow" data-save>Salvar</button><button class="btn ghost" data-close>Cancelar</button></div>`;
+  openSheet(html, (sh, close) => {
+    sh.$('[data-add]').addEventListener('click', () => { close(); lancarSheet('entrada', dateInMonth(ym)); });
+    sh.$('[data-more]').addEventListener('click', () => { close(); startDraft(); state.view = 'entradas'; state.incomeMonth = ym; render(); window.scrollTo(0, 0); });
+    sh.$$('[data-del]').forEach(b => b.addEventListener('click', async () => { await undoIncome(Number(b.dataset.del)); close(); incomeEditSheet(ym); }));
+    sh.$('[data-save]').addEventListener('click', async () => {
+      const next = structuredClone(state.settings);
+      sh.$$('input[data-i]').forEach(inp => { next.incomeRules[Number(inp.dataset.i)].amount = num(inp.value); });
+      if (await saveSettings(next)) { close(); render(); toast('Entradas salvas.'); }
+    });
+  });
+}
+
+// ----- Fixos (editar) -----
+function fixedSheet() {
+  let list = structuredClone(state.settings.fixed || []);
+  const cats = state.settings.categories;
+  const draw = sh => {
+    sh.$('[data-list]').innerHTML = list.map((f, i) => fixedRowHTML(f, i, cats, 'f')).join('') || '<p class="help">Nenhum fixo ainda.</p>';
+    sh.$$('[data-list] [data-bind]').forEach(el => el.addEventListener('input', () => {
+      const [, i, k] = el.dataset.bind.split('.');
+      list[+i][k] = el.dataset.type === 'money' ? num(el.value) : el.value;
+    }));
+    sh.$$('[data-list] [data-act="del"]').forEach(b => b.addEventListener('click', e => { e.stopPropagation(); list.splice(+b.dataset.i, 1); draw(sh); }));
+  };
+  const html = `<h2>Gastos fixos</h2>
+    <div class="meta">O que sai todo mês fora do cartão. Cada um entra na rubrica escolhida.</div>
+    <div data-list></div>
+    <button class="row add" data-addfix>Adicionar fixo</button>
+    <div class="err" data-err></div>
+    <div class="actions"><button class="btn primary grow" data-save>Salvar</button><button class="btn ghost" data-close>Cancelar</button></div>`;
+  openSheet(html, (sh, close) => {
+    draw(sh);
+    sh.$('[data-addfix]').addEventListener('click', () => { list.push({ name: '', value: 0, category: 'Casa' }); draw(sh); sh.$$('[data-list] input')[list.length * 2 - 2]?.focus(); });
+    sh.$('[data-save]').addEventListener('click', async () => {
+      const next = structuredClone(state.settings);
+      next.fixed = list.filter(f => (f.name || '').trim() || f.value).map(f => ({ ...f, name: f.name.trim() }));
+      if (next.fixed.some(f => !f.name)) { sh.$('[data-err]').textContent = 'Dê um nome a cada fixo.'; return; }
+      if (await saveSettings(next)) { close(); if (state.draft) startDraft(); render(); toast('Fixos salvos.'); }
     });
   });
 }

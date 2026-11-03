@@ -9,33 +9,35 @@ export const UNCLASSIFIED = 'A revisar';
 export const DEFAULT_RULES = [
   ['pagamento recebido', IGNORE],
   ['pagamento de fatura', IGNORE],
-  ['parcela', 'Parcelas'],
-  ['one membership', 'Assinaturas'],
-  ['ifood club', 'Assinaturas'],
+  ['one membership', 'Transporte'],
   ['uber', 'Transporte'],
   ['99app', 'Transporte'],
-  ['ifd', 'Refeições livres'],
-  ['99food', 'Refeições livres'],
-  ['rappi', 'Refeições livres'],
-  ['spotify', 'Assinaturas'],
-  ['netflix', 'Assinaturas'],
-  ['apple.com', 'Assinaturas'],
-  ['google one', 'Assinaturas'],
-  ['anthropic', 'Assinaturas'],
-  ['paramount', 'Assinaturas'],
-  ['melimais', 'Assinaturas'],
-  ['wellhub', 'Assinaturas'],
-  ['smart fit', 'Assinaturas'],
-  ['smartfit', 'Assinaturas'],
+  ['ifood club', 'Alimentação'],
+  ['ifd', 'Alimentação'],
+  ['99food', 'Alimentação'],
+  ['rappi', 'Alimentação'],
+  ['spotify', 'Lazer e Entretenimento'],
+  ['netflix', 'Lazer e Entretenimento'],
+  ['paramount', 'Lazer e Entretenimento'],
+  ['melimais', 'Lazer e Entretenimento'],
+  ['hbo', 'Lazer e Entretenimento'],
+  ['steam', 'Lazer e Entretenimento'],
+  ['apple.com', 'Despesas Pessoais'],
+  ['google one', 'Despesas Pessoais'],
+  ['anthropic', 'Despesas Pessoais'],
+  ['wellhub', 'Bem-Estar e Saúde'],
+  ['smart fit', 'Bem-Estar e Saúde'],
+  ['smartfit', 'Bem-Estar e Saúde'],
+  ['farmacia', 'Bem-Estar e Saúde'],
+  ['drogaria', 'Bem-Estar e Saúde'],
+  ['panvel', 'Bem-Estar e Saúde'],
+  ['raia', 'Bem-Estar e Saúde'],
   ['carrefour', 'Mercado'],
   ['zaffari', 'Mercado'],
+  ['rissul', 'Mercado'],
   ['supermercado', 'Mercado'],
-  ['farmacia', 'Saúde'],
-  ['drogaria', 'Saúde'],
-  ['panvel', 'Saúde'],
-  ['raia', 'Saúde'],
-  ['iof', 'Outros'],
-  ['estorno', 'Outros'],
+  ['iof', 'Pequenos gastos'],
+  ['estorno', 'Pequenos gastos'],
 ].map(([keyword, category]) => ({ keyword, category }));
 
 // Formas de pagamento lançadas à mão (os cartões vêm dos ajustes).
@@ -50,29 +52,70 @@ export const DEFAULT_SETTINGS = {
     { id: 'nubank', name: 'Nubank', closing: 3, due: 10, color: '#9085e9', primary: true },
     { id: 'inter', name: 'Inter', closing: null, due: null, color: '#d95926', primary: false },
   ],
-  fixed: [],              // gastos fora do cartão: [{ name, value }]
+  version: 2,
+  fixed: [],              // gastos fora do cartão: [{ name, value, category }]
   incomeRules: [
     { key: 'salario', name: 'Salário', type: 'businessDay', n: 5, amount: 0 },
     { key: 'vintena', name: 'Vintena', type: 'day', day: 20, shift: 'before', amount: 0 },
   ],
   reserveMonths: 6,
   aporteGoal: 0,
+  // as rubricas da planilha; o teto é só a parte variável (os fixos de cada rubrica somam por cima)
   categories: [
+    { name: 'Alimentação', budget: 400, fixed: false },
     { name: 'Mercado', budget: 300, fixed: false },
-    { name: 'Refeições livres', budget: 240, fixed: false },
-    { name: 'Mimos', budget: 160, fixed: false },
-    { name: 'Suplementos', budget: 100, fixed: false },
-    { name: 'Transporte', budget: 250, fixed: false },
-    { name: 'Assinaturas', budget: 420, fixed: true },
+    { name: 'Bem-Estar e Saúde', budget: 300, fixed: false },
     { name: 'Casa', budget: 260, fixed: true },
-    { name: 'Saúde', budget: 80, fixed: false },
-    { name: 'Parcelas', budget: 253, fixed: true },
-    { name: 'Outros', budget: 50, fixed: false },
+    { name: 'Despesas Pessoais', budget: 350, fixed: false },
+    { name: 'Educação', budget: 0, fixed: true },
+    { name: 'Lazer e Entretenimento', budget: 120, fixed: false },
+    { name: 'Pequenos gastos', budget: 50, fixed: false },
+    { name: 'Transporte', budget: 280, fixed: false },
+    { name: 'Viagem', budget: 0, fixed: false },
   ],
 };
 
+// ---------- migração das categorias antigas (v1) para as rubricas da planilha ----------
+const OLD_TO_NEW = {
+  'Refeições livres': 'Alimentação', 'Mimos': 'Alimentação',
+  'Suplementos': 'Bem-Estar e Saúde', 'Saúde': 'Bem-Estar e Saúde',
+  'Outros': 'Pequenos gastos', 'Assinaturas': 'Despesas Pessoais', 'Parcelas': null,
+};
+const OLD_SUBS = [
+  [/wellhub|smart ?fit|academia/, 'Bem-Estar e Saúde'],
+  [/one membership|uber/, 'Transporte'],
+  [/ifood/, 'Alimentação'],
+  [/spotify|netflix|paramount|melimais|hbo|max|disney|prime|globoplay|youtube|deezer/, 'Lazer e Entretenimento'],
+  [/nio|fibra|internet|vivo|claro|tim/, 'Casa'],
+];
+export const isOldCategory = name => Object.prototype.hasOwnProperty.call(OLD_TO_NEW, name);
+// Nova rubrica para uma regra/compra antiga. undefined = não muda; null = volta para "sem categoria".
+export function migrateCategory(oldCat, text = '') {
+  if (!isOldCategory(oldCat)) return undefined;
+  const t = normalize(text);
+  if (oldCat === 'Assinaturas') { const hit = OLD_SUBS.find(([re]) => re.test(t)); return hit ? hit[1] : 'Despesas Pessoais'; }
+  if (oldCat === 'Outros' && /steam|jogo|game/.test(t)) return 'Lazer e Entretenimento';
+  return OLD_TO_NEW[oldCat];
+}
+export function fixedCategoryGuess(name) {
+  const t = normalize(name);
+  if (/aluguel|condominio|luz|agua|internet|gas|iptu/.test(t)) return 'Casa';
+  if (/mestrado|faculdade|curso|escola|mensalidade/.test(t)) return 'Educação';
+  if (/academia|plano de saude|terapia/.test(t)) return 'Bem-Estar e Saúde';
+  return 'Despesas Pessoais';
+}
+// Ajustes antigos → novos (mantém cartões, entradas, fixos e reservas).
+export function migrateSettings(saved) {
+  const s = structuredClone(saved || {});
+  if ((s.version || 1) >= 2) return s;
+  s.categories = structuredClone(DEFAULT_SETTINGS.categories);
+  s.fixed = (s.fixed || []).map(f => ({ ...f, category: f.category || fixedCategoryGuess(f.name) }));
+  s.version = 2;
+  return s;
+}
+
 export function withDefaults(saved) {
-  const s = { ...structuredClone(DEFAULT_SETTINGS), ...(saved || {}) };
+  const s = { ...structuredClone(DEFAULT_SETTINGS), ...(saved ? migrateSettings(saved) : {}) };
   // migra o formato antigo (closingDay solto / income único)
   if (saved && saved.closingDay && !saved.cards) s.cards[0].closing = saved.closingDay;
   if (!Array.isArray(s.cards) || !s.cards.length) s.cards = structuredClone(DEFAULT_SETTINGS.cards);
@@ -372,7 +415,43 @@ function merchantOf(t, rules) {
   return { key, label };
 }
 
-export function summarize({ txs, rules, settings, cycle, today }) {
+// Mês que o ciclo "consome": o do vencimento da fatura (fatura de novembro → entradas e fixos de novembro).
+export function monthOfCycle(cycle, settings) {
+  return dueDateFor(cycle, primaryCard(settings)).slice(0, 7);
+}
+
+// Entradas do mês: o que já caiu (confirmado) ou o valor esperado, mais as avulsas (13º, freela…).
+export function monthIncomes(settings, incomes, ym) {
+  const [y, m] = ym.split('-').map(Number);
+  const sched = incomeSchedule(settings.incomeRules, y, m);
+  const inMonth = (incomes || []).filter(i => i.date.slice(0, 7) === ym);
+  const items = sched.map(it => {
+    const got = inMonth.find(i => i.rule_key === it.key);
+    return { key: it.key, name: it.name, date: got ? got.date : it.date, amount: got ? Number(got.amount) : it.amount, expected: it.amount, received: !!got, id: got ? got.id : null, why: it.why };
+  });
+  for (const i of inMonth) if (!i.rule_key || !sched.some(s => s.key === i.rule_key)) items.push({ key: null, name: i.name, date: i.date, amount: Number(i.amount), received: true, extra: true, id: i.id });
+  items.sort((a, b) => a.date.localeCompare(b.date));
+  return { items, total: round(items.reduce((s, i) => s + i.amount, 0)) };
+}
+
+// Liga cada fixo a um pagamento do mês: mesma rubrica e (nome na descrição, ou lançado à mão com valor parecido).
+export function matchFixed(fixed, txs, ym) {
+  const used = new Set();
+  return (fixed || []).map((f, i) => {
+    const value = Number(f.value) || 0;
+    const name = normalize(f.name);
+    const pool = txs.filter(t => !used.has(t) && t.cat === f.category && t.amount > 0);
+    const hit = pool.find(t => t.uid && t.uid.startsWith(`fixed|${i}|`))
+      || pool.find(t => name && normalize(t.title).includes(name))
+      || pool.find(t => t.manual && Math.abs(t.amount - value) <= Math.max(2, value * 0.1));
+    if (hit) used.add(hit);
+    return { index: i, name: f.name, value, category: f.category, month: ym, paid: !!hit, paidAmount: hit ? Number(hit.amount) : 0, tx: hit || null };
+  });
+}
+
+const txKey = t => t.id ?? t.uid;
+
+export function summarize({ txs, rules, settings, cycle, today, incomes = [] }) {
   const cats = settings.categories || [];
   const totalDays = daysBetween(cycle.start, cycle.end) + 1;
   const isCurrent = today >= cycle.start && today <= cycle.end;
@@ -380,47 +459,65 @@ export function summarize({ txs, rules, settings, cycle, today }) {
   const elapsedDays = isPast ? totalDays : isCurrent ? daysBetween(cycle.start, today) + 1 : 0;
   const elapsed = elapsedDays / totalDays;
   const daysLeft = isCurrent ? daysBetween(today, cycle.end) + 1 : 0;
+  const withCat = t => ({ ...t, cat: categoryOf(t, rules) });
+  const monthTx = m => txs.filter(t => t.date.slice(0, 7) === m).map(withCat).filter(t => t.cat !== IGNORE);
 
-  const inCycle = txs.filter(t => t.date >= cycle.start && t.date <= cycle.end).map(t => ({ ...t, cat: categoryOf(t, rules) }));
-  const counted = inCycle.filter(t => t.cat !== IGNORE);
+  // o mês do ciclo (o do vencimento): as entradas e os fixos que esta fatura disputa
+  const ym = monthOfCycle(cycle, settings);
+  const fixedItems = matchFixed(settings.fixed, monthTx(ym), ym);
+
+  // pagamentos de fixo contam no mês deles, não no ciclo em que a data caiu
+  const fixedTx = new Set();
+  for (const m of new Set([cycle.start.slice(0, 7), cycle.end.slice(0, 7)]))
+    for (const f of matchFixed(settings.fixed, monthTx(m), m)) if (f.tx) fixedTx.add(txKey(f.tx));
+
+  const inCycle = txs.filter(t => t.date >= cycle.start && t.date <= cycle.end).map(withCat)
+    .map(t => (fixedTx.has(txKey(t)) ? { ...t, isFixed: true } : t));
+  const counted = inCycle.filter(t => t.cat !== IGNORE && !t.isFixed);
 
   const spentBy = {};
   for (const t of counted) spentBy[t.cat] = (spentBy[t.cat] || 0) + Number(t.amount);
 
   const rows = cats.map(c => {
-    const spent = round(spentBy[c.name] || 0);
-    const budget = Number(c.budget) || 0;
-    const left = round(budget - spent);
+    const mine = fixedItems.filter(f => f.category === c.name);
+    const linked = round(mine.reduce((s, f) => s + f.value, 0));
+    const paidLinked = round(mine.reduce((s, f) => s + f.paidAmount, 0));
+    const unpaidLinked = round(mine.filter(f => !f.paid).reduce((s, f) => s + f.value, 0));
+    const varSpent = round(spentBy[c.name] || 0);
+    const varBudget = Number(c.budget) || 0;
+    const left = round(varBudget - varSpent);
     let status = 'ok';
-    if (spent > budget) status = 'over';
-    else if (!c.fixed && isCurrent && budget > 0 && spent > budget * elapsed * 1.1) status = 'warn';
-    const perWeek = (!c.fixed && isCurrent) ? round(Math.max(0, left) / Math.max(1, daysLeft / 7)) : null;
-    return { name: c.name, budget, spent, left, status, perWeek, fixed: !!c.fixed, pct: budget > 0 ? spent / budget : (spent > 0 ? 1 : 0) };
+    if (varSpent > varBudget + 0.005) status = 'over';
+    else if (!c.fixed && isCurrent && varBudget > 0 && varSpent > varBudget * elapsed * 1.1) status = 'warn';
+    const perWeek = (!c.fixed && isCurrent && varBudget > 0) ? round(Math.max(0, left) / Math.max(1, daysLeft / 7)) : null;
+    let varProj = varSpent;
+    if (isCurrent && elapsed > 0) varProj = c.fixed ? Math.max(varSpent, varBudget) : Math.max(varSpent / elapsed, varSpent + Math.max(0, varBudget - varSpent) * (1 - elapsed));
+    const spent = round(varSpent + paidLinked);
+    const budget = round(varBudget + linked);
+    return { name: c.name, budget, varBudget, varSpent, linked, unpaidLinked, spent, left, status, perWeek,
+      varProj: round(varProj), fixed: !!c.fixed, pct: budget > 0 ? spent / budget : (spent > 0 ? 1 : 0) };
   });
 
   const known = new Set(cats.map(c => c.name).concat([IGNORE]));
   const toClassify = inCycle.filter(t => !known.has(t.cat));
   const unclassifiedTotal = round(toClassify.reduce((s, t) => s + Number(t.amount), 0));
 
-  const spent = round(counted.reduce((s, t) => s + Number(t.amount), 0));
-  const budget = round(rows.reduce((s, r) => s + r.budget, 0));
-  const fixedOut = round((settings.fixed || []).reduce((s, f) => s + (Number(f.value) || 0), 0));
-  const income = round((settings.incomeRules || []).reduce((s, r) => s + (Number(r.amount) || 0), 0));
-  const available = round(income - fixedOut);
+  const varSpent = round(counted.reduce((s, t) => s + Number(t.amount), 0));
+  const varBudget = round(rows.reduce((s, r) => s + r.varBudget, 0));
+  const fixedTotal = round(fixedItems.reduce((s, f) => s + f.value, 0));
+  const fixedPaid = round(fixedItems.reduce((s, f) => s + f.paidAmount, 0));
+  const fixedCost = round(fixedItems.reduce((s, f) => s + (f.paid ? f.paidAmount : f.value), 0)); // o que ainda não foi pago conta pelo valor previsto
 
-  let projected = spent;
+  const inc = monthIncomes(settings, incomes, ym);
+  const income = inc.total;
+
+  let varProjected = varSpent;
   if (isCurrent && elapsed > 0) {
-    projected = 0;
-    const byName = Object.fromEntries(rows.map(r => [r.name, r]));
-    // fixo: o teto (ou o gasto, se passou); variável: o maior entre o ritmo atual e o plano para o resto do ciclo
-    for (const r of rows) projected += r.fixed ? Math.max(r.spent, r.budget) : Math.max(r.spent / elapsed, r.spent + Math.max(0, r.budget - r.spent) * (1 - elapsed));
-    const other = spent - rows.reduce((s, r) => s + r.spent, 0);
-    projected += other / elapsed;
-    projected = round(projected);
-    void byName;
+    const other = varSpent - rows.reduce((s, r) => s + r.varSpent, 0);   // sem categoria
+    varProjected = round(rows.reduce((s, r) => s + r.varProj, 0) + other / elapsed);
   }
 
-  // gasto acumulado dia a dia (para o gráfico do painel)
+  // gasto variável acumulado dia a dia (gráfico do painel), comparado com a soma dos tetos
   const cumulative = [];
   let acc = 0;
   for (let i = 0; i < totalDays; i++) {
@@ -428,28 +525,31 @@ export function summarize({ txs, rules, settings, cycle, today }) {
     acc += counted.filter(t => t.date === d).reduce((s, t) => s + Number(t.amount), 0);
     cumulative.push({ date: d, value: round(acc), future: d > today });
   }
-  const overDay = cumulative.find(p => budget > 0 && p.value > budget);
+  const overDay = cumulative.find(p => varBudget > 0 && p.value > varBudget);
 
-  // por origem
   const bySource = {};
   for (const t of counted) bySource[t.source || 'nubank'] = round((bySource[t.source || 'nubank'] || 0) + Number(t.amount));
 
-  // onde mais gastou
   const merch = {};
   for (const t of counted) {
     if (t.amount <= 0) continue;
     const m = merchantOf(t, rules);
-    (merch[m.key] ||= { label: m.label, total: 0, count: 0 });
+    (merch[m.key] ||= { label: m.label, total: 0 });
     merch[m.key].total = round(merch[m.key].total + Number(t.amount));
-    merch[m.key].count++;
   }
   const topMerchants = Object.values(merch).sort((a, b) => b.total - a.total).slice(0, 5);
 
   return {
-    cycle, isCurrent, isPast, totalDays, elapsed, daysLeft,
-    rows, spent, budget, available, fixedOut, income,
-    projected, leftover: round(available - projected), result: round(available - spent),
-    plannedLeftover: round(available - budget), overBudget: round(spent - budget),
+    cycle, isCurrent, isPast, totalDays, elapsed, daysLeft, month: ym,
+    rows, varSpent, varBudget, varProjected,
+    spent: round(varSpent + fixedPaid), budget: round(varBudget + fixedTotal),
+    projected: round(varProjected + fixedCost),
+    income, incomeItems: inc.items,
+    fixedItems, fixedTotal, fixedPaid, fixedCost,
+    available: round(income - fixedCost),                 // o que sobra das entradas depois dos fixos
+    leftover: round(income - fixedCost - varProjected),
+    result: round(income - fixedCost - varSpent),
+    overBudget: round(varSpent - varBudget),               // só a parte variável: fixo não "estoura teto"
     toClassify, unclassifiedTotal, txs: inCycle,
     cumulative, overDay, bySource, topMerchants,
   };
