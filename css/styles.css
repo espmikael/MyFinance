@@ -320,3 +320,40 @@ button.row:hover { background: color-mix(in srgb, var(--surface) 60%, transparen
   .edit-row.fixed-row select { grid-column: auto; grid-row: auto; }
   .edit-row.fixed-row .icon-btn { grid-column: auto; grid-row: auto; }
 }
+
+/* rubrica tocável no Início */
+.ledger li { padding: 0; }
+.ledger .lrow { display: block; width: 100%; text-align: left; background: none; border: 0; color: inherit; font: inherit; padding: 13px 0 11px; cursor: pointer; border-radius: 8px; }
+.ledger .lrow:active { background: var(--raise); }
+.h2-sub { font-family: var(--body); font-size: 12px; font-weight: 500; color: var(--faint); margin-left: 8px; letter-spacing: 0; text-transform: none; }
+
+/* hoje dá para gastar */
+.today-card { margin-top: 14px; padding: 14px 16px; border-radius: 14px; background: var(--brand-soft); border: 1px solid var(--brand-line); display: flex; justify-content: space-between; align-items: center; gap: 14px; flex-wrap: wrap; }
+.today-card > div { display: flex; flex-direction: column; }
+.today-card .k { color: var(--brand-text); font-size: 13px; font-weight: 600; }
+.today-card b { font-family: var(--display); font-size: 38px; font-weight: 800; line-height: 1; color: var(--brand-text); font-variant-numeric: tabular-nums; }
+.today-card small { color: var(--muted); font-size: 12.5px; line-height: 1.4; text-align: right; }
+.today-card.over { background: transparent; border-color: var(--over); }
+.today-card.over b, .today-card.over .k { color: var(--over); }
+@media (max-width: 420px) { .today-card small { text-align: left; } }
+
+/* resumo do mês no painel */
+.msum { margin-top: 12px; padding: 14px 0 16px; border-bottom: 1px solid var(--line); }
+.msum > b { display: block; font-family: var(--display); font-size: 44px; font-weight: 800; line-height: 1.02; font-variant-numeric: tabular-nums; }
+.mform { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 6px 10px; margin-top: 10px; font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.mform span { display: flex; flex-direction: column; }
+.mform small { font-size: 11.5px; font-weight: 500; color: var(--muted); }
+.mform i { font-style: normal; color: var(--faint); padding-bottom: 1px; }
+@media (min-width: 900px) { .month .mgrid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+/* busca e dia em Gastos */
+.search { margin-top: 14px; }
+.search .input { width: 100%; }
+.day { display: flex; justify-content: space-between; gap: 10px; }
+.day span:last-child { font-variant-numeric: tabular-nums; }
+.mform { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.mform small { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+@media (min-width: 900px) { .mform { grid-template-columns: repeat(3, max-content); gap: 28px; } }
+.hbar .lab { gap: 10px; }
+.hbar .lab > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hbar .lab > span:last-child { flex: none; white-space: nowrap; }

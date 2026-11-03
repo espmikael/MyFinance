@@ -146,6 +146,31 @@ export function suggestKeyword(title) {
     .slice(0, 40).trim();
 }
 
+// Nome legível para a lista de gastos ("Ifd*Vm Pizzaria e Hamb" → "iFood · Vm Pizzaria e Hamb").
+const SMALL = new Set(['de', 'da', 'do', 'das', 'dos', 'e', 'a', 'o', 'em', 'na', 'no']);
+const titleCase = s => s.toLowerCase().split(' ').map((w, i) => (i > 0 && SMALL.has(w)) ? w : w.replace(/^\p{L}/u, c => c.toUpperCase())).join(' ');
+export function prettyTitle(title) {
+  let t = String(title || '').replace(/\s+/g, ' ').trim();
+  let part = '';
+  const pm = t.match(/\s*-\s*parcela\s*(\d+\/\d+)\s*$/i);
+  if (pm) { part = ` · ${pm[1]}`; t = t.slice(0, pm.index); }
+  t = t.replace(/^pix no cr[eé]dito\s*-\s*/i, '');
+  const n = normalize(t);
+  if (/^dl\s*\*?\s*uber|^uber\b|uberrides|uber \*trip/.test(n)) return (/eats/.test(n) ? 'Uber Eats' : /one/.test(n) ? 'Uber One' : 'Uber') + part;
+  if (/^99\s*app|^99 ?pop|^99\*/.test(n) && !/food/.test(n)) return '99' + part;
+  let prefix = '';
+  if (/^ifd\s*\*\s*ifood/.test(n)) return 'iFood Club' + part;
+  if (/^ru unisinos/.test(n)) return 'RU Unisinos' + part;
+  if (/^ifd\s*\*/.test(n)) { prefix = 'iFood · '; t = t.replace(/^ifd\s*\*\s*/i, ''); }
+  else if (/^99food/.test(n)) { prefix = '99Food · '; t = t.replace(/^99food\s*\*?\s*/i, ''); }
+  else t = t.replace(/^(dl|ec|mp|pg|zp|app|ebn|pag|pp|sumup|stone|jim\.com|mercadopago|picpay)\s*\*\s*/i, '');
+  t = t.replace(/\b(comercio|com\.?) de (alim(entos)?|alimen\w*)\b/ig, '')
+    .replace(/\b(ltda|eireli|me|epp|s\.?a\.?)\.?$/i, '').replace(/\s+\d{3,}$/, '').replace(/[*_]+/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!t) return (prefix ? prefix.replace(' · ', '') : String(title)) + part;
+  const cased = /[a-z]/.test(t) && /[A-Z]/.test(t.slice(1)) && !/^[A-Z][a-z]/.test(t) ? t : titleCase(t);
+  return prefix + cased + part;
+}
+
 export function parseAmount(raw) {
   if (typeof raw === 'number') return raw;
   let s = String(raw ?? '').replace(/\s/g, '').replace(/R\$/i, '');
@@ -552,7 +577,27 @@ export function summarize({ txs, rules, settings, cycle, today, incomes = [] }) 
     overBudget: round(varSpent - varBudget),               // só a parte variável: fixo não "estoura teto"
     toClassify, unclassifiedTotal, txs: inCycle,
     cumulative, overDay, bySource, topMerchants,
+    // quanto ainda cabe por dia nas rubricas variáveis (o que estourou não "empresta" das outras)
+    varLeft: round(rows.filter(r => !r.fixed && r.varBudget > 0).reduce((s, r) => s + Math.max(0, r.left), 0)),
+    perDay: isCurrent ? round(rows.filter(r => !r.fixed && r.varBudget > 0).reduce((s, r) => s + Math.max(0, r.left), 0) / Math.max(1, daysLeft)) : null,
   };
+}
+
+// Média do gasto variável por rubrica nos últimos ciclos fechados que têm compras.
+export function averageByCategory({ txs, rules, settings, incomes, today, cycles = 3 }) {
+  const closing = primaryCard(settings).closing || 1;
+  let c = shiftCycle(cycleFor(today, closing).start, -1, closing);
+  const used = [];
+  for (let i = 0; i < 12 && used.length < cycles; i++, c = shiftCycle(c.start, -1, closing)) {
+    const s = summarize({ txs, rules, settings, cycle: c, today, incomes });
+    if (s.varSpent > 0) used.push(s);
+  }
+  const out = {};
+  for (const cat of settings.categories || []) {
+    const vals = used.map(s => (s.rows.find(r => r.name === cat.name) || { varSpent: 0 }).varSpent);
+    out[cat.name] = vals.length ? round(vals.reduce((a, b) => a + b, 0) / vals.length) : 0;
+  }
+  return { cycles: used.map(s => s.cycle), avg: out };
 }
 
 // Total gasto (sem ignorados) num ciclo — usado para comparar com a fatura anterior.

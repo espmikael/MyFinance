@@ -31,6 +31,7 @@ const state = {
   cycle: null,
   view: 'home',
   filter: 'all',
+  q: '',                 // busca em Gastos
   incomeMonth: null,     // 'YYYY-MM' na tela de entradas
   month: null,           // 'YYYY-MM' no bloco do mês do painel
   busy: false,
@@ -119,7 +120,7 @@ async function migrateV2(raw) {
 async function loadTxs() {
   const all = [];
   for (let from = 0; ; from += 1000) {
-    const page = await q(sb.from('transactions').select('id,uid,date,title,amount,category,source,manual').order('date', { ascending: false }).order('id').range(from, from + 999));
+    const page = await q(sb.from('transactions').select('id,uid,date,title,amount,category,source,manual,created_at').order('date', { ascending: false }).order('id').range(from, from + 999));
     all.push(...page.map(t => ({ ...t, amount: Number(t.amount) })));
     if (page.length < 1000) break;
   }
@@ -212,10 +213,11 @@ function viewHome(s) {
     </div>`;
   }
   const hasIncome = s.income > 0;
+  const mName = L.MONTHS[+s.month.slice(5, 7) - 1];
   let label, value;
   if (!hasIncome) { label = 'Gasto no ciclo'; value = s.spent; }
-  else if (s.isCurrent) { label = 'Sobra projetada no fim do ciclo'; value = s.leftover; }
-  else { label = 'Resultado da fatura'; value = s.result; }
+  else if (s.isCurrent) { label = `Sobra prevista de ${mName}`; value = s.leftover; }
+  else { label = `Sobra de ${mName}`; value = s.result; }
   const spentPct = s.budget > 0 ? Math.min(1, s.spent / s.budget) : 0;
 
   const facts = [
@@ -237,12 +239,14 @@ function viewHome(s) {
     const onlyFixed = r.varBudget === 0 && r.linked > 0 && r.varSpent <= 0;
     if (onlyFixed) right = `<span class="tag">fixo</span>`;
     const leftTxt = onlyFixed ? (r.unpaidLinked ? `${money(r.unpaidLinked)} a pagar` : 'pago') : signed(r.left);
-    return `<li><div class="r1"><span class="name">${esc(r.name)}</span><span class="left ${!onlyFixed && r.left < 0 ? 'over' : ''}">${leftTxt}</span></div>
+    return `<li><button class="lrow" data-act="cat-open" data-c="${esc(r.name)}" aria-label="Ver gastos de ${esc(r.name)}"><div class="r1"><span class="name">${esc(r.name)}</span><span class="left ${!onlyFixed && r.left < 0 ? 'over' : ''}">${leftTxt}</span></div>
       <div class="meter" role="img" aria-label="${pct(r.pct)} do teto"><span class="${r.status === 'ok' ? '' : r.status}" style="width:${w}%"></span></div>
-      <div class="r2"><span>${money(r.spent)} de ${money(r.budget)}</span>${right}</div></li>`;
+      <div class="r2"><span>${money(r.spent)} de ${money(r.budget)}</span>${right}</div></button></li>`;
   }).join('');
 
   return `${cycleRow(s)}
+    ${uploadNudge()}
+    ${s.isCurrent ? todayCard(s) : ''}
     <section class="hero">
       <div class="k">${label}</div>
       <div class="big ${hasIncome && value < 0 ? 'neg' : ''}">${signed(value)}</div>
@@ -255,45 +259,74 @@ function viewHome(s) {
     </section>
     ${s.toClassify.length ? `<div class="notice"><span>${s.toClassify.length === 1 ? '1 compra sem categoria' : `${s.toClassify.length} compras sem categoria`}</span><button class="btn primary small" data-act="classify">Classificar</button></div>` : ''}
     ${!hasIncome ? `<div class="notice"><span>Informe suas entradas para ver a sobra do mês.</span><button class="btn small" data-act="inc-edit">Entradas</button></div>` : ''}
-    <h2 class="h2">Quanto resta</h2>
+    <h2 class="h2">Quanto resta <span class="h2-sub">toque para ver os gastos</span></h2>
     <ul class="ledger two">${rows}</ul>`;
 }
 
+function todayCard(s) {
+  const end = L.dayMonth(s.cycle.end);
+  if (s.perDay > 0) return `<section class="today-card">
+      <div><span class="k">Hoje dá para gastar</span><b>${money(s.perDay)}</b></div>
+      <small>${money(s.perDay * 7)} por semana · ${s.daysLeft} ${s.daysLeft === 1 ? 'dia' : 'dias'} até ${end}<br>conta só o que resta nos tetos, sem os fixos</small>
+    </section>`;
+  return `<section class="today-card over">
+      <div><span class="k">Hoje dá para gastar</span><b>R$ 0</b></div>
+      <small>Os tetos variáveis acabaram. Até ${end}, só o essencial.</small>
+    </section>`;
+}
+
+// lembrete do envio semanal: última compra vinda de fatura
+function uploadNudge() {
+  const imported = state.txs.filter(t => !t.manual);
+  if (!imported.length) return '';
+  const last = imported.reduce((m, t) => { const d = (t.created_at || t.date).slice(0, 10); return d > m ? d : m; }, '');
+  const days = L.daysBetween(last, today());
+  if (days < 7) return '';
+  return `<div class="notice"><span>Última fatura enviada há ${days} dias. Exporte o CSV do Nubank e atualize.</span><button class="btn primary small" data-act="upload">Enviar</button></div>`;
+}
+
 // ----- Gastos -----
+function gastosList(s) {
+  const known = new Set(catNames().concat([L.IGNORE]));
+  const f = state.filter, qq = L.normalize(state.q);
+  const list = s.txs.filter(t => f === 'all' ? true : f === 'unc' ? !known.has(t.cat) : f.startsWith('src:') ? (t.source || 'nubank') === f.slice(4) : f.startsWith('cat:') ? t.cat === f.slice(4) : true)
+    .filter(t => !qq || L.normalize(`${t.title} ${L.prettyTitle(t.title)} ${t.cat} ${t.amount.toFixed(2).replace('.', ',')}`).includes(qq))
+    .sort((a, b) => b.date.localeCompare(a.date) || a.title.localeCompare(b.title));
+  if (!list.length) return `<p class="help" style="margin-top:20px">${qq ? 'Nada encontrado.' : 'Nada aqui neste ciclo.'}</p>`;
+  const dayTotal = {};
+  for (const t of list) if (t.cat !== L.IGNORE) dayTotal[t.date] = (dayTotal[t.date] || 0) + t.amount;
+  let html = '', lastDay = null;
+  for (const t of list) {
+    if (t.date !== lastDay) { html += `<div class="day"><span>${longDay(t.date)}</span><span>${money(dayTotal[t.date] || 0)}</span></div>`; lastDay = t.date; }
+    const isUnc = !known.has(t.cat);
+    const sub = isUnc ? 'Sem categoria · toque para classificar' : `${t.cat === L.IGNORE ? 'Ignorado' : esc(t.cat)} · ${esc(sourceName(t.source))}${t.isFixed ? ` · fixo de ${L.MONTHS[+t.date.slice(5, 7) - 1]}` : t.manual ? ' · à mão' : ''}`;
+    html += `<button class="tx ${t.cat === L.IGNORE ? 'ign' : ''}" data-act="tx" data-id="${t.id}">
+      <span class="t"><span>${esc(L.prettyTitle(t.title))}</span><span class="c ${isUnc ? 'unc' : ''}">${sub}</span></span>
+      <span class="v ${t.amount < 0 ? 'pos' : ''}">${signed(t.amount)}</span></button>`;
+  }
+  const sum = list.filter(t => t.cat !== L.IGNORE).reduce((a, t) => a + t.amount, 0);
+  html += `<div class="total-line"><span>${list.length} ${list.length === 1 ? 'lançamento' : 'lançamentos'}</span><span>${signed(sum)}</span></div>`;
+  return html;
+}
+
 function viewGastos(s) {
   const known = new Set(catNames().concat([L.IGNORE]));
   const unc = s.txs.filter(t => !known.has(t.cat));
   const srcIds = [...new Set(s.txs.map(t => t.source || 'nubank'))];
   const catsHere = catNames().filter(c => s.txs.some(t => t.cat === c));
   const f = state.filter;
-  const list = s.txs.filter(t => f === 'all' ? true : f === 'unc' ? !known.has(t.cat) : f.startsWith('src:') ? (t.source || 'nubank') === f.slice(4) : f.startsWith('cat:') ? t.cat === f.slice(4) : true)
-    .sort((a, b) => b.date.localeCompare(a.date) || a.title.localeCompare(b.title));
-
   const chip = (id, label, extra = '') => `<button class="chip ${extra}" data-act="filter" data-f="${esc(id)}" aria-pressed="${f === id}">${label}</button>`;
-  let html = `<h1 class="page-title">Gastos do ciclo</h1>
+  return `<h1 class="page-title">Gastos do ciclo</h1>
     <div class="k" style="margin-top:4px">${s.txs.length} ${s.txs.length === 1 ? 'lançamento' : 'lançamentos'} · ${money(s.txs.filter(t => t.cat !== L.IGNORE).reduce((a, t) => a + t.amount, 0))}</div>
     ${cycleRow(s)}
+    <div class="search"><input class="input" id="gq" type="search" placeholder="Buscar loja, rubrica ou valor" value="${esc(state.q)}" aria-label="Buscar gastos"></div>
     <div class="chips" role="toolbar" aria-label="Filtrar">
       ${chip('all', 'Todos', 'all')}
       ${unc.length ? chip('unc', `Sem categoria · ${unc.length}`, 'flag') : ''}
       ${srcIds.map(id => chip('src:' + id, `<span class="dot" style="background:${sourceColor(id)}"></span>${esc(sourceName(id))}`)).join('')}
       ${catsHere.map(c => chip('cat:' + c, esc(c))).join('')}
-    </div>`;
-  if (!list.length) html += `<p class="help" style="margin-top:20px">Nada aqui neste ciclo.</p>`;
-  let lastDay = null;
-  for (const t of list) {
-    if (t.date !== lastDay) { html += `<div class="day">${longDay(t.date)}</div>`; lastDay = t.date; }
-    const isUnc = !known.has(t.cat);
-    const sub = isUnc ? 'Sem categoria · toque para classificar' : `${t.cat === L.IGNORE ? 'Ignorado' : esc(t.cat)} · ${esc(sourceName(t.source))}${t.isFixed ? ` · fixo de ${L.MONTHS[+t.date.slice(5, 7) - 1]}` : t.manual ? ' · à mão' : ''}`;
-    html += `<button class="tx ${t.cat === L.IGNORE ? 'ign' : ''}" data-act="tx" data-id="${t.id}">
-      <span class="t"><span>${esc(t.title)}</span><span class="c ${isUnc ? 'unc' : ''}">${sub}</span></span>
-      <span class="v ${t.amount < 0 ? 'pos' : ''}">${signed(t.amount)}</span></button>`;
-  }
-  if (list.length) {
-    const sum = list.filter(t => t.cat !== L.IGNORE).reduce((a, t) => a + t.amount, 0);
-    html += `<div class="total-line"><span>${list.length} ${list.length === 1 ? 'lançamento' : 'lançamentos'}</span><span>${signed(sum)}</span></div>`;
-  }
-  return html;
+    </div>
+    <div id="txlist">${gastosList(s)}</div>`;
 }
 
 // ----- Painel -----
@@ -365,11 +398,21 @@ function monthBlock() {
       ${f.paid ? `<button class="pill ok" data-act="fix-unpay" data-id="${f.tx.id}" aria-label="${esc(f.name)} pago. Tocar para ver">pago ✓</button>`
         : canPay ? `<button class="pill" data-act="fix-pay" data-i="${f.index}" data-ym="${ym}">marcar pago</button>` : `<span class="pill ghost">a pagar</span>`}</span></div>`).join('');
   const sobra = open ? m.leftover : m.result;
+  const cardOut = open ? m.varProjected : m.varSpent;
   return `<section class="card full month">
     <div class="mhead">
       <button class="icon-btn sm" data-act="month" data-d="-1" aria-label="Mês anterior">‹</button>
-      <div><b>${monthName(ym)}</b><small>entradas, fixos e a fatura que vence ${L.ddmm(due)}</small></div>
+      <div><b>${monthName(ym)}</b><small>a fatura que vence ${L.ddmm(due)} sai deste mês</small></div>
       <button class="icon-btn sm" data-act="month" data-d="1" aria-label="Próximo mês">›</button>
+    </div>
+    <div class="msum">
+      <span class="k">${open ? 'Sobra prevista' : 'Sobra do mês'}</span>
+      <b class="${m.income > 0 && sobra < 0 ? 'neg' : ''}">${m.income > 0 ? signed(sobra) : '—'}</b>
+      <div class="mform">
+        <span><small>Entradas</small>${money(m.income)}</span>
+        <span><small>− Fixos</small>${money(m.fixedCost)}</span>
+        <span><small>− Cartão${open ? ' (proj.)' : ''}</small>${money(cardOut)}</span>
+      </div>
     </div>
     <div class="mgrid">
       <div class="mcol">
@@ -382,14 +425,6 @@ function monthBlock() {
         ${fix || '<p class="help">Nenhum fixo. Aluguel, mestrado, plano do celular…</p>'}
         <div class="mact"><button class="btn small ghost" data-act="fix-edit">Editar fixos</button></div>
       </div>
-      <div class="mcol">
-        <div class="mtitle"><span>A conta</span></div>
-        <div class="mrow"><span class="mn"><span>Entradas</span></span><b>${money(m.income)}</b></div>
-        <div class="mrow"><span class="mn"><span>Fixos</span></span><b>− ${money(m.fixedCost)}</b></div>
-        <div class="mrow"><span class="mn"><span>${L.invoiceName(m.cycle, c, today())}</span><small>${open ? 'em aberto · projeção até fechar' : 'gastos do ciclo'} ${L.dayMonth(m.cycle.start)}–${L.dayMonth(m.cycle.end)}</small></span><b>− ${money(open ? m.varProjected : m.varSpent)}</b></div>
-        <div class="mrow total"><span class="mn"><span>${open ? 'Sobra prevista' : 'Sobra do mês'}</span></span><b class="${sobra < 0 ? 'neg' : 'pos'}">${signed(sobra)}</b></div>
-        ${m.income <= 0 ? '<p class="help small">Sem entradas neste mês: informe em "Editar valores".</p>' : ''}
-      </div>
     </div>
   </section>`;
 }
@@ -401,7 +436,7 @@ function viewPainel(s) {
   const kpis = [
     ['Gasto no ciclo', money(s.varSpent), 'sem os fixos'],
     [s.overBudget > 0 ? 'Acima dos tetos' : 'Abaixo dos tetos', money(Math.abs(s.overBudget)), '', s.overBudget > 0 ? 'neg' : ''],
-    [s.isCurrent ? 'Sobra prevista' : 'Sobra', s.income > 0 ? signed(s.isCurrent ? s.leftover : s.result) : '—', s.income > 0 ? `com as entradas de ${L.MONTHS[+s.month.slice(5, 7) - 1]}` : 'informe as entradas', (s.isCurrent ? s.leftover : s.result) < 0 && s.income > 0 ? 'neg' : ''],
+    s.isCurrent ? ['Projeção até fechar', money(s.varProjected), `hoje cabe ${money(s.perDay || 0)} por dia`] : ['Média por dia', money(s.varSpent / s.totalDays), `${s.totalDays} dias de ciclo`],
     ['Ciclo anterior', prevTotal > 0 ? money(prevTotal) : '—', diff != null && s.varSpent > 0 ? `este ciclo: ${diff >= 0 ? '+' : '−'}${pct(Math.abs(diff))}` : prevTotal > 0 ? 'fatura passada' : 'sem dados'],
   ];
 
@@ -583,8 +618,9 @@ function viewAjustes() {
 
     <h2 class="h2">Rubricas e tetos</h2>
     <p class="help">O teto é o que você pode gastar variando (cartão, Pix, à mão). Os fixos da rubrica somam por cima. Marque "fixo" na rubrica que não varia no mês: ela fica fora do "por semana".</p>
+    <button class="btn soft small" data-act="suggest" style="margin:4px 0 6px">Sugerir tetos pela média dos últimos ciclos</button>
     ${cats}
-    <button class="row add" data-act="add" data-path="categories">Adicionar categoria</button>
+    <button class="row add" data-act="add" data-path="categories">Adicionar rubrica</button>
 
     <h2 class="h2">Reservas</h2>
     <div class="grid2">
@@ -697,13 +733,13 @@ document.addEventListener('click', async e => {
     case 'view':
       if (['ajustes', 'entradas'].includes(el.dataset.v) && !['ajustes', 'entradas'].includes(state.view)) startDraft();
       if (!['ajustes', 'entradas'].includes(el.dataset.v)) state.draft = null;
-      state.view = el.dataset.v; state.filter = 'all'; render(); window.scrollTo(0, 0); return;
+      state.view = el.dataset.v; state.filter = 'all'; state.q = ''; render(); window.scrollTo(0, 0); return;
     case 'upload': return pickFile();
     case 'lancar': return lancarSheet(el.dataset.mode || 'gasto');
     case 'prev': state.cycle = L.shiftCycle(state.cycle.start, -1, closing); return render();
     case 'next': if (state.cycle.start < curCycle().start) { state.cycle = L.shiftCycle(state.cycle.start, 1, closing); render(); } return;
     case 'classify': state.view = 'gastos'; state.filter = 'unc'; render(); window.scrollTo(0, 0); return;
-    case 'filter': state.filter = el.dataset.f; return render();
+    case 'filter': state.filter = el.dataset.f; { const y = window.scrollY; render(); window.scrollTo(0, y); } return;
     case 'tx': return txSheet(Number(el.dataset.id));
     case 'add': return addDraftRow(el.dataset.path);
     case 'del': state.draft[el.dataset.path].splice(Number(el.dataset.i), 1); return render();
@@ -730,6 +766,8 @@ document.addEventListener('click', async e => {
     case 'inc-add': return lancarSheet('entrada', dateInMonth(el.dataset.ym));
     case 'inc-edit': return incomeEditSheet(el.dataset.ym || L.monthOfCycle(state.cycle, state.settings));
     case 'fix-edit': return fixedSheet();
+    case 'cat-open': state.view = 'gastos'; state.filter = 'cat:' + el.dataset.c; state.q = ''; render(); window.scrollTo(0, 0); return;
+    case 'suggest': return suggestSheet();
     case 'fix-pay': return payFixed(Number(el.dataset.i), el.dataset.ym);
     case 'fix-unpay': return txSheet(Number(el.dataset.id));
   }
@@ -754,7 +792,10 @@ async function payFixed(i, ym) {
 }
 
 // edição dos ajustes: cada campo escreve direto no rascunho
-document.addEventListener('input', e => bindInput(e.target));
+document.addEventListener('input', e => {
+  if (e.target.id === 'gq') { state.q = e.target.value; const box = document.getElementById('txlist'); if (box) box.innerHTML = gastosList(summary(state.cycle)); return; }
+  bindInput(e.target);
+});
 document.addEventListener('change', e => {
   bindInput(e.target);
   if (e.target.dataset.bind && /\.type$/.test(e.target.dataset.bind)) render();
@@ -1052,6 +1093,35 @@ function txSheet(id) {
         t.category = chosen; toast('Categoria alterada.');
       }
       close(); render();
+    });
+  });
+}
+
+// ----- Sugerir tetos -----
+function suggestSheet() {
+  const { cycles, avg } = L.averageByCategory({ txs: state.txs, rules: state.rules, settings: state.settings, incomes: state.incomes, today: today() });
+  if (!cycles.length) return toast('Ainda não há ciclo fechado com compras para calcular a média.');
+  const cats = (state.draft || state.settings).categories;
+  let cut = 0;
+  const sug = v => Math.max(0, Math.ceil((v * (1 - cut)) / 10) * 10);
+  const rows = () => cats.filter(c => !c.fixed).map(c => {
+    const a = avg[c.name] || 0, n = sug(a);
+    return `<div class="list-row"><span class="mn"><span>${esc(c.name)}</span><small>média ${money(a)} · hoje ${money(c.budget)}</small></span><b>${money(n)}</b></div>`;
+  }).join('');
+  const html = `<h2>Sugerir tetos</h2>
+    <div class="meta">Média do gasto variável (sem fixos) em ${cycles.length} ${cycles.length === 1 ? 'ciclo fechado' : 'ciclos fechados'}: ${cycles.map(c => L.dayMonth(c.start)).reverse().join(', ')}.</div>
+    <div class="seg" role="group" aria-label="Quanto cortar" style="display:inline-flex;margin:10px 0 4px">
+      ${[[0, 'Média'], [0.1, '−10%'], [0.2, '−20%'], [0.3, '−30%']].map(([v, l]) => `<button data-cut="${v}" aria-pressed="${v === 0}">${l}</button>`).join('')}
+    </div>
+    <div data-rows>${rows()}</div>
+    <p class="help small">Rubricas marcadas como fixas ficam como estão. Nada muda até você tocar em Salvar ajustes.</p>
+    <div class="actions"><button class="btn primary grow" data-apply>Usar estes tetos</button><button class="btn ghost" data-close>Cancelar</button></div>`;
+  openSheet(html, (sh, close) => {
+    pickChips(sh, 'cut', v => { cut = Number(v); sh.$('[data-rows]').innerHTML = rows(); });
+    sh.$('[data-apply]').addEventListener('click', () => {
+      if (!state.draft) startDraft();
+      for (const c of state.draft.categories) if (!c.fixed) c.budget = sug(avg[c.name] || 0);
+      close(); render(); toast('Tetos preenchidos. Confira e toque em Salvar ajustes.');
     });
   });
 }
