@@ -1,4 +1,4 @@
-# Caixa
+# MyFinance
 
 Controle das faturas, entradas e reservas. Você envia o CSV do cartão, o app categoriza e mostra quanto resta em cada categoria, quanto dá para gastar por semana, de onde veio cada gasto e quanto está guardado. Funciona no PC e no iPhone, com os dados no Supabase.
 

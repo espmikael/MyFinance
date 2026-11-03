@@ -1,6 +1,6 @@
 {
-  "name": "Caixa",
-  "short_name": "Caixa",
+  "name": "MyFinance",
+  "short_name": "MyFinance",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
