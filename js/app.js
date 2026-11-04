@@ -376,14 +376,20 @@ function lineChart(s, W, H, mobile) {
 function cycleForMonth(ym) {
   const closing = card().closing || 1;
   let c = L.cycleFor(`${ym}-15`, closing);
-  for (let i = 0; i < 4 && L.monthOfCycle(c, state.settings) !== ym; i++)
-    c = L.shiftCycle(c.start, L.monthOfCycle(c, state.settings) > ym ? -1 : 1, closing);
+  for (let i = 0; i < 4 && L.monthOfCycle(c) !== ym; i++)
+    c = L.shiftCycle(c.start, L.monthOfCycle(c) > ym ? -1 : 1, closing);
   return c;
 }
 const monthName = ym => L.MONTHS[+ym.slice(5, 7) - 1].replace(/^./, ch => ch.toUpperCase()) + (ym.slice(0, 4) === today().slice(0, 4) ? '' : ` de ${ym.slice(0, 4)}`);
 
+function defaultMonth() {
+  const closing = card().closing || 1;
+  const prev = L.shiftCycle(curCycle().start, -1, closing);
+  return today() <= L.dueDateFor(prev, card()) ? L.monthOfCycle(prev) : L.monthOfCycle(curCycle());
+}
+
 function monthBlock() {
-  const ym = state.month || today().slice(0, 7);
+  const ym = state.month || defaultMonth();
   const m = summary(cycleForMonth(ym));
   const c = card();
   const due = L.dueDateFor(m.cycle, c);
@@ -391,7 +397,8 @@ function monthBlock() {
   const canPay = ym <= today().slice(0, 7);
   const inc = m.incomeItems.map(i => `<div class="mrow">
       <span class="mn"><span>${esc(i.name)}</span><small>${L.ddmm(i.date)} · ${i.extra ? 'avulsa' : i.received ? 'recebida' : 'prevista'}</small></span>
-      <b class="${i.received ? '' : 'muted'}">${money(i.amount)}</b></div>`).join('');
+      <span class="mv"><b class="${i.received ? '' : 'muted'}">${money(i.amount)}</b>
+      ${i.received ? `<span class="pill ok">recebida ✓</span>` : `<button class="pill" data-act="income-confirm" data-key="${esc(i.key)}" data-ym="${i.target}">confirmar</button>`}</span></div>`).join('');
   const fix = m.fixedItems.map(f => `<div class="mrow">
       <span class="mn"><span>${esc(f.name)}</span><small>${esc(f.category || 'sem rubrica')}</small></span>
       <span class="mv"><b class="${f.paid ? '' : 'muted'}">${money(f.paid ? f.paidAmount : f.value)}</b>
@@ -402,7 +409,7 @@ function monthBlock() {
   return `<section class="card full month">
     <div class="mhead">
       <button class="icon-btn sm" data-act="month" data-d="-1" aria-label="Mês anterior">‹</button>
-      <div><b>${monthName(ym)}</b><small>a fatura que vence ${L.ddmm(due)} sai deste mês</small></div>
+      <div><b>${monthName(ym)}</b><small>${esc(L.invoiceName(m.cycle, c, today()))} (${L.dayMonth(m.cycle.start)}–${L.dayMonth(m.cycle.end)}) · vence ${L.ddmm(due)}</small></div>
       <button class="icon-btn sm" data-act="month" data-d="1" aria-label="Próximo mês">›</button>
     </div>
     <div class="msum">
@@ -695,6 +702,7 @@ function viewEntradas() {
         <input class="input" data-bind="incomeRules.${i}.${r.type === 'businessDay' ? 'n' : 'day'}" data-type="int" inputmode="numeric" value="${r.type === 'businessDay' ? (r.n ?? 5) : (r.day ?? 20)}" aria-label="${r.type === 'businessDay' ? 'Qual dia útil' : 'Dia do mês'}">
       </div>
       ${r.type === 'day' ? `<label class="check" style="margin-top:4px"><input type="checkbox" data-bind="incomeRules.${i}.shift" data-type="shift" ${r.shift !== 'after' ? 'checked' : ''}> Se cair em fim de semana ou feriado, vem antes</label>` : ''}
+      <label class="check" style="margin-top:4px;white-space:normal"><input type="checkbox" data-bind="incomeRules.${i}.monthOffset" data-type="offset" ${Number(r.monthOffset) === 1 ? 'checked' : ''}> Cai no mês seguinte ao de referência (ex.: o salário de outubro cai em novembro)</label>
     </div>`).join('');
 
   return `<div class="cycle" style="margin-top:6px">
@@ -764,7 +772,7 @@ document.addEventListener('click', async e => {
       state.month = L.addMonths(base, Number(el.dataset.d)).slice(0, 7); return render();
     }
     case 'inc-add': return lancarSheet('entrada', dateInMonth(el.dataset.ym));
-    case 'inc-edit': return incomeEditSheet(el.dataset.ym || L.monthOfCycle(state.cycle, state.settings));
+    case 'inc-edit': return incomeEditSheet(el.dataset.ym || L.monthOfCycle(state.cycle));
     case 'fix-edit': return fixedSheet();
     case 'cat-open': state.view = 'gastos'; state.filter = 'cat:' + el.dataset.c; state.q = ''; render(); window.scrollTo(0, 0); return;
     case 'suggest': return suggestSheet();
@@ -808,6 +816,7 @@ function bindInput(el) {
   if (t === 'money') v = num(v);
   else if (t === 'int') v = v === '' ? null : parseInt(v, 10) || null;
   else if (t === 'shift') v = el.checked ? 'before' : 'after';
+  else if (t === 'offset') v = el.checked ? 1 : 0;
   const keys = path.split('.');
   let o = state.draft;
   for (const k of keys.slice(0, -1)) o = o[k];
@@ -823,7 +832,7 @@ function addDraftRow(path) {
     const name = 'Novo cartão';
     d.cards.push({ id: L.slug(name) + '-' + Date.now().toString(36).slice(-4), name, closing: null, due: null, color: PALETTE[d.cards.length % PALETTE.length], primary: false });
   }
-  if (path === 'incomeRules') d.incomeRules.push({ key: 'extra-' + Date.now().toString(36), name: 'Nova entrada', type: 'day', day: 1, shift: 'before', amount: 0 });
+  if (path === 'incomeRules') d.incomeRules.push({ key: 'extra-' + Date.now().toString(36), name: 'Nova entrada', type: 'day', day: 1, shift: 'before', amount: 0, monthOffset: 0 });
   render();
 }
 
@@ -1132,10 +1141,10 @@ function incomeEditSheet(ym) {
   const items = L.monthIncomes(state.settings, state.incomes, ym).items;
   const extras = items.filter(i => i.extra);
   const html = `<h2>Entradas de ${monthName(ym).toLowerCase()}</h2>
-    <div class="meta">Valor esperado de cada entrada fixa. Fica salvo para os próximos meses.</div>
+    <div class="meta">Valor esperado de cada entrada fixa (fica salvo para os próximos meses). Para registrar o que caiu, use "confirmar" no Painel.</div>
     ${rules.map((r, i) => {
       const it = items.find(x => x.key === r.key);
-      return `<div class="field"><label for="ir${i}">${esc(r.name)} <span class="muted small">· ${it ? L.ddmm(it.date) : ''}${it && it.received ? ` · caiu ${money(it.amount)}` : ''}</span></label>
+      return `<div class="field"><label for="ir${i}">${esc(r.name)} <span class="muted small">· ${it ? L.ddmm(it.date) : ''}${it && it.received ? ` · caiu ${money(it.amount)}` : ''}</span>${it && it.received ? ` <button class="btn small ghost" data-del="${it.id}" style="min-height:26px;padding:2px 10px;margin-left:4px">desfazer</button>` : ''}</label>
         <div class="money"><span>R$</span><input id="ir${i}" data-i="${i}" inputmode="decimal" value="${fmtIn(r.amount)}" placeholder="0,00"></div></div>`;
     }).join('') || '<p class="help">Nenhuma entrada fixa ainda.</p>'}
     ${extras.length ? `<div class="lbl" style="margin-top:16px">Avulsas neste mês</div>${extras.map(e => `<div class="list-row"><span>${esc(e.name)} <span class="muted small">${L.ddmm(e.date)}</span></span><span style="display:flex;gap:10px;align-items:center"><b>${money(e.amount)}</b><button class="icon-btn sm" data-del="${e.id}" aria-label="Apagar ${esc(e.name)}">×</button></span></div>`).join('')}` : ''}

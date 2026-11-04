@@ -55,8 +55,8 @@ export const DEFAULT_SETTINGS = {
   version: 2,
   fixed: [],              // gastos fora do cartão: [{ name, value, category }]
   incomeRules: [
-    { key: 'salario', name: 'Salário', type: 'businessDay', n: 5, amount: 0 },
-    { key: 'vintena', name: 'Vintena', type: 'day', day: 20, shift: 'before', amount: 0 },
+    { key: 'vintena', name: 'Vintena', type: 'day', day: 20, shift: 'before', amount: 0, monthOffset: 0 },
+    { key: 'salario', name: 'Salário', type: 'businessDay', n: 5, amount: 0, monthOffset: 1 },
   ],
   reserveMonths: 6,
   aporteGoal: 0,
@@ -120,6 +120,8 @@ export function withDefaults(saved) {
   if (saved && saved.closingDay && !saved.cards) s.cards[0].closing = saved.closingDay;
   if (!Array.isArray(s.cards) || !s.cards.length) s.cards = structuredClone(DEFAULT_SETTINGS.cards);
   if (!s.cards.some(c => c.primary)) s.cards[0].primary = true;
+  // salário cai no mês seguinte ao de referência; as demais entradas, no próprio mês
+  s.incomeRules = (s.incomeRules || []).map(r => (r.monthOffset == null ? { ...r, monthOffset: r.key === 'salario' ? 1 : 0 } : r));
   return s;
 }
 
@@ -440,21 +442,28 @@ function merchantOf(t, rules) {
   return { key, label };
 }
 
-// Mês que o ciclo "consome": o do vencimento da fatura (fatura de novembro → entradas e fixos de novembro).
-export function monthOfCycle(cycle, settings) {
-  return dueDateFor(cycle, primaryCard(settings)).slice(0, 7);
+// Competência do ciclo: o mês em que ele começa (ciclo 3/10–2/11 = outubro, paga com a vintena de
+// outubro e o salário do 5º dia útil de novembro, na fatura que vence em 10/11).
+export function monthOfCycle(cycle) {
+  return cycle.start.slice(0, 7);
 }
+const ymShift = (ym, n) => addMonths(`${ym}-01`, n).slice(0, 7);
+// Mês em que cada entrada fixa da competência ym cai (salário = mês seguinte).
+export const incomeMonthFor = (rule, ym) => ymShift(ym, Number(rule.monthOffset) || 0);
 
-// Entradas do mês: o que já caiu (confirmado) ou o valor esperado, mais as avulsas (13º, freela…).
+// Entradas da competência: o que já caiu (confirmado) ou o valor esperado, mais as avulsas do mês (13º, freela…).
 export function monthIncomes(settings, incomes, ym) {
-  const [y, m] = ym.split('-').map(Number);
-  const sched = incomeSchedule(settings.incomeRules, y, m);
-  const inMonth = (incomes || []).filter(i => i.date.slice(0, 7) === ym);
-  const items = sched.map(it => {
-    const got = inMonth.find(i => i.rule_key === it.key);
-    return { key: it.key, name: it.name, date: got ? got.date : it.date, amount: got ? Number(got.amount) : it.amount, expected: it.amount, received: !!got, id: got ? got.id : null, why: it.why };
+  const items = (settings.incomeRules || []).map(r => {
+    const target = incomeMonthFor(r, ym);
+    const [y, m] = target.split('-').map(Number);
+    const it = incomeSchedule([r], y, m)[0];
+    const got = (incomes || []).find(i => i.rule_key === r.key && i.date.slice(0, 7) === target);
+    return { key: r.key, name: r.name, date: got ? got.date : it.date, amount: got ? Number(got.amount) : it.amount, expected: it.amount,
+      received: !!got, id: got ? got.id : null, why: it.why, target };
   });
-  for (const i of inMonth) if (!i.rule_key || !sched.some(s => s.key === i.rule_key)) items.push({ key: null, name: i.name, date: i.date, amount: Number(i.amount), received: true, extra: true, id: i.id });
+  const keys = new Set((settings.incomeRules || []).map(r => r.key));
+  for (const i of incomes || []) if (i.date.slice(0, 7) === ym && (!i.rule_key || !keys.has(i.rule_key)))
+    items.push({ key: null, name: i.name, date: i.date, amount: Number(i.amount), received: true, extra: true, id: i.id });
   items.sort((a, b) => a.date.localeCompare(b.date));
   return { items, total: round(items.reduce((s, i) => s + i.amount, 0)) };
 }
@@ -466,7 +475,7 @@ export function matchFixed(fixed, txs, ym) {
     const value = Number(f.value) || 0;
     const name = normalize(f.name);
     const pool = txs.filter(t => !used.has(t) && t.cat === f.category && t.amount > 0);
-    const hit = pool.find(t => t.uid && t.uid.startsWith(`fixed|${i}|`))
+    const hit = pool.find(t => t.uid && t.uid.startsWith(`fixed|${i}|${ym}|`))
       || pool.find(t => name && normalize(t.title).includes(name))
       || pool.find(t => t.manual && Math.abs(t.amount - value) <= Math.max(2, value * 0.1));
     if (hit) used.add(hit);
@@ -488,7 +497,7 @@ export function summarize({ txs, rules, settings, cycle, today, incomes = [] }) 
   const monthTx = m => txs.filter(t => t.date.slice(0, 7) === m).map(withCat).filter(t => t.cat !== IGNORE);
 
   // o mês do ciclo (o do vencimento): as entradas e os fixos que esta fatura disputa
-  const ym = monthOfCycle(cycle, settings);
+  const ym = monthOfCycle(cycle);
   const fixedItems = matchFixed(settings.fixed, monthTx(ym), ym);
 
   // pagamentos de fixo contam no mês deles, não no ciclo em que a data caiu
