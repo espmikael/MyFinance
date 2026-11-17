@@ -66,6 +66,7 @@ export const DEFAULT_SETTINGS = {
   aporteGoal: 0,
   // limite do gasto variável no mês: null = automático (entradas − contas − meta de aporte)
   varLimit: null,
+  oneOff: [],             // uids de compras pontuais: contam no gasto, mas não no ritmo nem na média
   // as rubricas da planilha; teto por rubrica é opcional (0 = sem teto, compara com a média)
   categories: [
     { name: 'Alimentação', budget: 0, fixed: false },
@@ -145,6 +146,9 @@ export function withDefaults(saved) {
     s.version = 4;
   }
   if (s.varLimit != null && !(Number(s.varLimit) >= 0)) s.varLimit = null;
+  if (!Array.isArray(s.oneOff)) s.oneOff = [];
+  // rubricas essenciais (o mínimo do modo contenção): por padrão Mercado e Transporte
+  s.categories = (s.categories || []).map(c => (c.essential == null ? { ...c, essential: /^(mercado|transporte)$/i.test(normalize(c.name)) } : c));
   return s;
 }
 
@@ -566,16 +570,18 @@ export function summarize({ txs, rules, settings, cycle, today, incomes = [], av
     for (const f of matchFixed(billsOut(settings, m, txs, rules), monthTx(m), m)) if (f.tx) fixedTx.add(txKey(f.tx));
 
   const commits = cardCommitments({ txs, rules, settings, cycle, today });
+  const oneOff = new Set(settings.oneOff || []);
   // day: o dia em que a compra pesa no ciclo (a data real, ou o 1º dia do ciclo se veio de antes por outro cartão)
   const inCycle = txs.filter(t => inCycleOf(t, cycle, settings)).map(withCat)
-    .map(t => ({ ...t, day: t.date < cycle.start ? cycle.start : t.date > cycle.end ? cycle.end : t.date }))
+    .map(t => ({ ...t, day: t.date < cycle.start ? cycle.start : t.date > cycle.end ? cycle.end : t.date, ...(oneOff.has(t.uid) ? { oneOff: true } : {}) }))
     .map(t => (fixedTx.has(txKey(t)) ? { ...t, isFixed: true } : commits.kinds.has(txKey(t)) ? { ...t, commit: commits.kinds.get(txKey(t)) } : t));
   const counted = inCycle.filter(t => t.cat !== IGNORE && !t.isFixed);
 
-  const spentBy = {}, freeBy = {};
+  const spentBy = {}, freeBy = {}, paceBy = {};
   for (const t of counted) {
     spentBy[t.cat] = (spentBy[t.cat] || 0) + Number(t.amount);
     if (!t.commit) freeBy[t.cat] = (freeBy[t.cat] || 0) + Number(t.amount);
+    if (!t.commit && !t.oneOff) paceBy[t.cat] = (paceBy[t.cat] || 0) + Number(t.amount);
   }
 
   const rows = cats.map(c => {
@@ -585,20 +591,21 @@ export function summarize({ txs, rules, settings, cycle, today, incomes = [], av
     const unpaidLinked = round(mine.filter(f => !f.paid).reduce((s, f) => s + f.value, 0));
     const varSpent = round(spentBy[c.name] || 0);
     const freeSpent = round(freeBy[c.name] || 0);     // sem parcelas e assinaturas: o que se decide no dia a dia
+    const paceSpent = round(paceBy[c.name] || 0);     // e sem compras pontuais: o que se repete
     const varBudget = Number(c.budget) || 0;          // teto opcional
     const left = varBudget > 0 ? round(varBudget - varSpent) : null;
     const average = avg && avg[c.name] > 0 ? avg[c.name] : 0;
     // comparação com a média: no ciclo atual, contra o que você costuma ter gasto até este ponto; nos fechados, contra o ciclo inteiro
     const expected = average > 0 ? round(isPast ? average : average * elapsed) : 0;
-    const vsAvg = expected > 0 && !c.fixed && (isPast || (isCurrent && elapsed >= 0.2)) ? Math.round((freeSpent / expected - 1) * 100) / 100 : null;
+    const vsAvg = expected > 0 && !c.fixed && (isPast || (isCurrent && elapsed >= 0.2)) ? Math.round((paceSpent / expected - 1) * 100) / 100 : null;
     let status = 'ok';
     if (varBudget > 0 && varSpent > varBudget + 0.005) status = 'over';
     else if (!c.fixed && isCurrent && varBudget > 0 && varSpent > varBudget * elapsed * 1.1) status = 'warn';
-    else if (vsAvg != null && freeSpent - expected > 30 && vsAvg >= 0.25) status = 'above';
+    else if (vsAvg != null && paceSpent - expected > 30 && vsAvg >= 0.25) status = 'above';
     const perWeek = (!c.fixed && isCurrent && varBudget > 0) ? round(Math.max(0, left) / Math.max(1, daysLeft / 7)) : null;
     const spent = round(varSpent + paidLinked);
     const budget = round(varBudget + linked);
-    return { name: c.name, budget, varBudget, varSpent, freeSpent, linked, unpaidLinked, spent, left, status, perWeek, avg: average, expected, vsAvg,
+    return { name: c.name, budget, varBudget, varSpent, freeSpent, paceSpent, essential: !!c.essential, linked, unpaidLinked, spent, left, status, perWeek, avg: average, expected, vsAvg,
       fixed: !!c.fixed, pct: budget > 0 ? spent / budget : (spent > 0 ? 1 : 0) };
   });
 
@@ -624,11 +631,13 @@ export function summarize({ txs, rules, settings, cycle, today, incomes = [], av
   const committed = commits.total;
   const freeBudget = varBudget > 0 ? round(Math.max(0, varBudget - committed)) : 0;
   const freeSpent = round(varSpent - commits.actualTotal);
+  const oneOffSpent = round(counted.filter(t => t.oneOff && !t.commit).reduce((a, t) => a + Number(t.amount), 0));
 
   // projeção: compromissos + o dia a dia no ritmo dele. Na 1ª semana o ritmo ainda não diz nada: usa o plano.
   let varProjected = varSpent;
   if (isCurrent) {
-    const pace = elapsedDays >= 7 ? freeSpent / elapsedDays * totalDays : Math.max(freeSpent, freeBudget || freeSpent / Math.max(1, elapsedDays) * totalDays);
+    const repeats = freeSpent - oneOffSpent;            // o que se repete; compras pontuais entram uma vez só
+    const pace = elapsedDays >= 7 ? repeats / elapsedDays * totalDays + oneOffSpent : Math.max(freeSpent, freeBudget || repeats / Math.max(1, elapsedDays) * totalDays + oneOffSpent);
     varProjected = round(committed + Math.max(freeSpent, pace));
   } else if (!isPast) varProjected = round(committed + freeBudget);
   const planProjected = round(committed + Math.max(freeSpent, freeBudget));   // se seguir as semanas
@@ -645,6 +654,20 @@ export function summarize({ txs, rules, settings, cycle, today, incomes = [], av
   }
   const overDay = cumulative.find(p => varBudget > 0 && p.value > varBudget);
   const weeks = weekPlan({ cycle, today, varBudget: freeBudget, cumulative: cumFree });
+  // modo contenção: o limite do mês acabou, mas comer e se deslocar continuam. A semana passa a liberar
+  // só o essencial (média das rubricas essenciais por ciclo, proporcional aos dias).
+  let containment = null;
+  if (isCurrent && freeBudget > 0 && freeSpent > freeBudget) {
+    const essCats = cats.filter(c => c.essential).map(c => c.name);
+    const essAvg = avg ? essCats.reduce((a, n) => a + (avg[n] || 0), 0) : 0;
+    const perDayEss = essAvg > 0 ? essAvg / totalDays : freeBudget / totalDays * 0.5;
+    containment = { cats: essCats, perWeek: round(perDayEss * 7), fromAvg: essAvg > 0 };
+    for (const w of weeks) {
+      if (w.status === 'past') continue;
+      w.limit = round(perDayEss * w.days); w.left = round(w.limit - w.spent); w.containment = true;
+      if (w.status === 'now') w.perDay = round(Math.max(0, w.left) / w.daysLeft);
+    }
+  }
 
   const bySource = {};
   for (const t of counted) bySource[t.source || 'nubank'] = round((bySource[t.source || 'nubank'] || 0) + Number(t.amount));
@@ -672,7 +695,7 @@ export function summarize({ txs, rules, settings, cycle, today, incomes = [], av
     balance: round(income - fixedCost - varSpent - (isPast ? 0 : commits.pendingTotal)),
     overBudget: round(varSpent - varBudget),               // só a parte variável: fixo não "estoura teto"
     toClassify, unclassifiedTotal, txs: inCycle,
-    cumulative, overDay, bySource, topMerchants, weeks, week: weeks.find(w => w.status === 'now') || null,
+    cumulative, overDay, bySource, topMerchants, weeks, containment, oneOffSpent, week: weeks.find(w => w.status === 'now') || null,
     // quanto ainda cabe por dia nas rubricas variáveis (o que estourou não "empresta" das outras)
     limitMode, autoLimit,
     commits, committed, freeBudget, freeSpent, planProjected,
@@ -786,7 +809,7 @@ export function averageByCategory({ txs, rules, settings, incomes, today, cycles
   }
   const out = {};
   for (const cat of settings.categories || []) {
-    const vals = used.map(s => (s.rows.find(r => r.name === cat.name) || { freeSpent: 0 }).freeSpent);
+    const vals = used.map(s => (s.rows.find(r => r.name === cat.name) || { paceSpent: 0 }).paceSpent);
     out[cat.name] = vals.length ? round(vals.reduce((a, b) => a + b, 0) / vals.length) : 0;
   }
   return { cycles: used.map(s => s.cycle), avg: out };
@@ -992,7 +1015,7 @@ export function moneyAgenda({ settings, txs, rules, incomes, today, days = 35, p
     if (inWin(inv.due)) {
       const proj = inv.card.primary && primaryProjection != null ? primaryProjection : inv.total;
       const sub = !inv.configured ? 'datas do cartão não configuradas: usei as do principal'
-        : inv.card.primary && primaryProjection != null ? 'projeção da fatura aberta' : 'fatura aberta até agora';
+        : inv.card.primary && primaryProjection != null ? 'fatura aberta + parcelas e assinaturas a vir' : 'fatura aberta até agora';
       if (proj > 0) ev.push({ date: inv.due, kind: 'out', title: `Fatura ${name} vence`, sub, amount: -round(proj) });
     }
   }
@@ -1009,7 +1032,7 @@ export function moneyAgenda({ settings, txs, rules, incomes, today, days = 35, p
   let tip = null;
   if (min && min.balance < 0) {
     const before = ev.filter(e => e.kind === 'in' && e.date <= min.date).pop();
-    tip = { need: Math.ceil(-min.balance / 10) * 10, from: before ? before.title : null, fromDate: before ? before.date : null };
+    tip = { need: Math.ceil(-min.balance / 10) * 10, from: before ? before.title : null, fromDate: before ? before.date : null, fromAmount: before ? before.amount : 0 };
   }
   return { events: ev, start: bal, balanceDate: settings.balance ? settings.balance.date : null, min, tip };
 }
