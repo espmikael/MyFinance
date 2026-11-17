@@ -1,5 +1,5 @@
-import * as L from './logic.js?v=20261117o';
-import { SUPABASE_URL, SUPABASE_ANON_KEY } from './config.js?v=20261117o';
+import * as L from './logic.js?v=20261117p';
+import { SUPABASE_URL, SUPABASE_ANON_KEY } from './config.js?v=20261117p';
 
 const $app = document.getElementById('app');
 const $toast = document.getElementById('toast');
@@ -1534,7 +1534,7 @@ function pickFile() {
     if (f.size > 15e6) return toast('Arquivo grande demais para uma fatura.');
     let text;
     try {
-      if (/\.xlsx$/i.test(f.name)) { const X = await import('./xlsx.js?v=20261117o'); text = await X.xlsxToCSV(await f.arrayBuffer()); }
+      if (/\.xlsx$/i.test(f.name)) { const X = await import('./xlsx.js?v=20261117p'); text = await X.xlsxToCSV(await f.arrayBuffer()); }
       else if (/\.xls$/i.test(f.name)) return toast('Arquivo .xls antigo: abra no Excel e salve como .xlsx ou CSV.');
       else text = await f.text();
     } catch (err) { return toast('Não consegui ler o arquivo: ' + (err.message || err)); }
@@ -2062,8 +2062,8 @@ function renderLogin(msg = '') {
   $app.innerHTML = `<div class="center"><form class="login" id="login">
     <span class="brand"><span class="logo">${icon('bars', 18, 2.2)}</span>MyFinance</span>
     <p>Entre para ver suas faturas.</p>
-    <div class="field"><label for="email">E-mail</label><input class="input" id="email" type="email" autocomplete="email" required></div>
-    <div class="field"><label for="pass">Senha</label><input class="input" id="pass" type="password" autocomplete="current-password" required></div>
+    <div class="field"><label for="email">E-mail</label><input class="input" id="email" name="email" type="email" autocomplete="username" autocapitalize="none" required></div>
+    <div class="field"><label for="pass">Senha</label><input class="input" id="pass" name="password" type="password" autocomplete="current-password" required></div>
     <div class="err" id="lerr" role="alert"></div>
     <p class="help small" id="lok" role="status"></p>
     <div class="actions"><button class="btn primary grow" type="submit">Entrar</button></div>
