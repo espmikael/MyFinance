@@ -392,3 +392,11 @@ button.row:hover { background: var(--raise); }
 #toast.show { opacity: 1; transform: translate(-50%, 0); }
 @media (min-width: 900px) { #toast { bottom: 28px; } }
 @media (prefers-reduced-motion: reduce) { #toast { transition: none; } }
+
+/* voltar e fechar */
+.backbtn { align-self: flex-start; display: inline-flex; align-items: center; gap: 4px; min-height: 32px; padding: 0 10px 0 6px; margin: 0 0 6px -6px; border: 0; border-radius: 8px; background: transparent; color: var(--brand-text); font-size: 14px; font-weight: 600; }
+.backbtn:hover { background: var(--brand-soft); }
+.sheet { position: relative; }
+.sheet-x { position: absolute; top: 12px; right: 12px; width: 36px; height: 36px; border-radius: 10px; border: 1px solid var(--line); background: var(--surface); color: var(--text); display: flex; align-items: center; justify-content: center; z-index: 2; }
+.sheet h2, .sheet .head { padding-right: 44px; }
+body.noscroll { overflow: hidden; }

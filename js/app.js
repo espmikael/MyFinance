@@ -1,5 +1,5 @@
-import * as L from './logic.js?v=20261117c';
-import { SUPABASE_URL, SUPABASE_ANON_KEY } from './config.js?v=20261117c';
+import * as L from './logic.js?v=20261117d';
+import { SUPABASE_URL, SUPABASE_ANON_KEY } from './config.js?v=20261117d';
 
 const $app = document.getElementById('app');
 const $toast = document.getElementById('toast');
@@ -41,6 +41,7 @@ const state = {
   pc: { amt: 50, cat: null }, // posso comprar?
   priv: (() => { try { return localStorage.getItem('mf-priv') === '1'; } catch (e) { return false; } })(),
   busy: false,
+  lastBatch: null,       // último envio de fatura, para desfazer
 };
 let sb = null;
 
@@ -87,6 +88,7 @@ async function enter(user) {
     return;
   }
   state.cycle = curCycle();
+  try { history.replaceState({ v: state.view, f: state.filter }, '', location.pathname); } catch (e) {}
   render();
   listenRealtime();
 }
@@ -178,6 +180,37 @@ async function saveSettings(next) {
   return true;
 }
 
+// ---------------- navegação (voltar do navegador, do iPhone e do app) ----------------
+let navDepth = 0;
+const sheets = [];   // janelas abertas (a de cima é a última)
+function go(v, { filter = 'all', cycle = null } = {}) {
+  if (['ajustes', 'entradas'].includes(v) && !['ajustes', 'entradas'].includes(state.view)) startDraft();
+  if (!['ajustes', 'entradas'].includes(v)) state.draft = null;
+  if (cycle) state.cycle = cycle;
+  state.view = v; state.filter = filter; state.q = '';
+  navDepth++;
+  try { history.pushState({ v, f: filter }, ''); } catch (e) {}
+  render(); window.scrollTo(0, 0);
+}
+function goBack() {
+  if (sheets.length) return sheets[sheets.length - 1]();
+  if (navDepth > 0) history.back(); else go('home');
+}
+window.addEventListener('popstate', e => {
+  if (!state.user) return;
+  if (sheets.length) {            // voltar com uma janela aberta: fecha a janela e fica na tela
+    sheets[sheets.length - 1]();
+    try { history.pushState({ v: state.view, f: state.filter }, ''); } catch (err) {}
+    return;
+  }
+  navDepth = Math.max(0, navDepth - 1);
+  const st = e.state || { v: 'home', f: 'all' };
+  if (['ajustes', 'entradas'].includes(st.v) && !['ajustes', 'entradas'].includes(state.view)) startDraft();
+  if (!['ajustes', 'entradas'].includes(st.v)) state.draft = null;
+  state.view = st.v || 'home'; state.filter = st.f || 'all'; state.q = '';
+  render(); window.scrollTo(0, 0);
+});
+
 // ---------------- render ----------------
 const ICON = {
   home: '<path d="M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/>',
@@ -193,6 +226,8 @@ const ICON = {
   more: '<circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>',
   warn: '<path d="M12 9v4M12 17h.01M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/>',
   check: '<path d="M20 6L9 17l-5-5"/>',
+  x: '<path d="M18 6L6 18M6 6l12 12"/>',
+  undo: '<path d="M3 7v6h6"/><path d="M3 13a9 9 0 1 0 3-7.7L3 8"/>',
   nfc: '<path d="M8.5 7.5a6 6 0 0 1 0 9M12 5a9.5 9.5 0 0 1 0 14M5 10a2.5 2.5 0 0 1 0 4"/>',
   search: '<circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/>',
   bars: '<path d="M5 19V9M12 19V5M19 19v-7"/>',
@@ -243,7 +278,7 @@ function headActions({ upload = true } = {}) {
     <button class="icon-btn only-mob" data-act="menu" aria-label="Mais opções">${icon('more', 20)}</button>
   </div>`;
 }
-const pageHead = (title, sub, actions = headActions(), cls = '') => `<header class="pagehead ${cls}"><div class="t"><h1 class="page-title">${title}</h1>${sub ? `<span class="sub">${sub}</span>` : ''}</div>${actions}</header>`;
+const pageHead = (title, sub, actions = headActions(), cls = '') => `<header class="pagehead ${cls}"><div class="t">${state.view !== 'home' ? `<button class="backbtn" data-act="back" aria-label="Voltar">‹ Voltar</button>` : ''}<h1 class="page-title">${title}</h1>${sub ? `<span class="sub">${sub}</span>` : ''}</div>${actions}</header>`;
 
 function cycleRow(s) {
   const c = card(), cur = curCycle(), t = today();
@@ -271,6 +306,7 @@ function viewHome(s) {
     </div>`;
   }
   return `${pageHead('Início', sub)}
+    ${lastBatchNotice()}
     ${uploadNudge()}
     ${s.toClassify.length ? `<div class="notice"><span>${s.toClassify.length === 1 ? '1 compra sem rubrica' : `${s.toClassify.length} compras sem rubrica`}. Ao classificar, o app aprende para as próximas.</span><button class="btn small" data-act="classify">Classificar</button></div>` : ''}
     ${s.income <= 0 ? `<div class="notice info"><span>Informe suas entradas para ver a sobra do mês.</span><button class="btn small" data-act="inc-edit">Entradas</button></div>` : ''}
@@ -451,6 +487,51 @@ function rubricasCard(s) {
     ${calm.length ? `<div class="calm">${calmHTML}</div>` : ''}
     ${!vr.length ? '<p class="help">Defina tetos para as rubricas em Ajustes.</p>' : ''}
   </section>`;
+}
+
+// envios de fatura: compras importadas juntas (mesmo cartão, mesmo minuto)
+function batches() {
+  const map = new Map();
+  for (const t of state.txs) {
+    if (t.manual || !t.created_at) continue;
+    const key = (t.source || 'nubank') + '|' + t.created_at.slice(0, 16);
+    let b = map.get(key);
+    if (!b) { b = { key, source: t.source || 'nubank', at: t.created_at, ids: [], total: 0, lo: t.date, hi: t.date }; map.set(key, b); }
+    b.ids.push(t.id); b.total += Number(t.amount) || 0;
+    if (t.date < b.lo) b.lo = t.date; if (t.date > b.hi) b.hi = t.date;
+  }
+  return [...map.values()].sort((a, b) => b.at.localeCompare(a.at));
+}
+const atLabel = iso => { const d = new Date(iso); return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')} às ${String(d.getHours()).padStart(2, '0')}h${String(d.getMinutes()).padStart(2, '0')}`; };
+
+function lastBatchNotice() {
+  if (!state.lastBatch) return '';
+  const b = batches().find(x => x.key === state.lastBatch);
+  if (!b) return '';
+  return `<div class="notice info"><span>Fatura do ${esc(sourceName(b.source))} enviada: ${b.ids.length} ${b.ids.length === 1 ? 'compra nova' : 'compras novas'}. Mandou o arquivo errado?</span>
+    <span style="display:flex;gap:8px"><button class="btn small" data-act="batch-undo" data-k="${esc(b.key)}">${icon('undo', 15)}Desfazer envio</button><button class="btn small ghost" data-act="batch-dismiss">Ok</button></span></div>`;
+}
+
+function undoBatchSheet(key) {
+  const b = batches().find(x => x.key === key);
+  if (!b) return toast('Esse envio não existe mais.');
+  const html = `<h2>Desfazer envio</h2>
+    <div class="meta">Fatura do ${esc(sourceName(b.source))} enviada em ${atLabel(b.at)}</div>
+    <div class="sumbox"><div><span>Compras que saem do app</span><b>${b.ids.length}</b></div><div><span>Total</span><b>${money(b.total)}</b></div><div><span>Período</span><span>${L.ddmm(b.lo)} a ${L.ddmm(b.hi)}</span></div></div>
+    <p class="help">Só as compras deste envio são apagadas. As regras que você criou continuam. Depois dá para enviar o arquivo certo normalmente.</p>
+    <div class="err" data-err></div>
+    <div class="actions"><button class="btn danger grow" data-go>Apagar as ${b.ids.length} compras deste envio</button><button class="btn ghost" data-close>Cancelar</button></div>`;
+  openSheet(html, (sh, close) => {
+    sh.$('[data-go]').addEventListener('click', async () => {
+      const btn = sh.$('[data-go]'); btn.disabled = true; btn.textContent = 'Apagando…';
+      for (let i = 0; i < b.ids.length; i += 200) {
+        const { error } = await sb.from('transactions').delete().in('id', b.ids.slice(i, i + 200)).eq('manual', false);
+        if (error) { sh.$('[data-err]').textContent = 'Não apagou: ' + error.message; btn.disabled = false; return; }
+      }
+      if (state.lastBatch === key) state.lastBatch = null;
+      await loadTxs(); close(); render(); toast(`Envio desfeito: ${b.ids.length} compras removidas.`);
+    });
+  });
 }
 
 // lembrete do envio semanal: última compra vinda de fatura
@@ -637,7 +718,7 @@ function monthBlock() {
   const open = m.isCurrent;
   const canPay = ym <= today().slice(0, 7);
   const inc = m.incomeItems.map(i => `<div class="mrow">
-      <span class="mn"><span>${esc(i.name)}</span><small>${L.ddmm(i.date)} · ${i.extra ? 'avulsa' : i.received ? 'recebida' : 'prevista'}</small></span>
+      <span class="mn"><span>${esc(i.name)}</span><small>${L.ddmm(i.date)} · ${i.extra ? 'avulsa' : esc(incomeRef(i, ym)) + (i.received ? ' · recebida' : ' · prevista')}</small></span>
       <span class="mv"><b class="${i.received ? '' : 'muted'}">${money(i.amount)}</b>
       ${i.received ? `<span class="pill ok">recebida ✓</span>` : `<button class="pill" data-act="income-confirm" data-key="${esc(i.key)}" data-ym="${i.target}">confirmar</button>`}</span></div>`).join('');
   const fix = m.fixedItems.map(f => `<div class="mrow">
@@ -883,6 +964,13 @@ function viewAjustes() {
       <div style="margin-top:6px">${rules}</div>
     </section>
     <section class="card">
+      <div class="card-head"><h2>Envios de fatura</h2><span class="sub">os mais recentes</span></div>
+      <p class="help">Mandou um arquivo errado? Desfaça o envio inteiro aqui. Só as compras daquele envio saem.</p>
+      ${batches().slice(0, 8).map(b => `<div class="lrow"><span class="ic" style="background:${safeColor(sourceColor(b.source))}22;color:${safeColor(sourceColor(b.source))}">${icon('up', 16)}</span>
+        <span class="m"><b>${esc(sourceName(b.source))} · ${b.ids.length} ${b.ids.length === 1 ? 'compra' : 'compras'}</b><small>${atLabel(b.at)} · ${L.ddmm(b.lo)} a ${L.ddmm(b.hi)} · ${money(b.total)}</small></span>
+        <span class="r"><button class="btn small danger" data-act="batch-undo" data-k="${esc(b.key)}">Desfazer</button></span></div>`).join('') || '<p class="help">Nenhum envio ainda.</p>'}
+    </section>
+    <section class="card">
       <div class="card-head"><h2>Aparência</h2></div>
       <div class="seg" role="group" aria-label="Tema" style="max-width:360px">
         ${[['auto', 'Automático'], ['light', 'Claro'], ['dark', 'Escuro']].map(([v, l]) => `<button data-act="theme" data-t="${v}" aria-pressed="${theme === v}">${l}</button>`).join('')}
@@ -896,74 +984,72 @@ function viewAjustes() {
 }
 
 // ----- Entradas -----
+// de qual folha é cada entrada fixa (o salário que cai em dezembro é o restante da folha de novembro)
+function incomeRef(it, ym) {
+  if (!it.key) return 'avulsa';
+  const r = (state.settings.incomeRules || []).find(x => x.key === it.key);
+  const M = mName(ym);
+  if (r && Number(r.monthOffset) === 1) return `restante da folha de ${M}`;
+  if (r && /vintena|adiant/i.test(r.name)) return `adiantamento da folha de ${M}`;
+  return `referente a ${M}`;
+}
+
 function viewEntradas() {
   if (!state.draft) startDraft();
-  const ym = state.incomeMonth || today().slice(0, 7);
-  const [y, m] = ym.split('-').map(Number);
-  const sched = L.incomeSchedule(state.settings.incomeRules, y, m);
-  const recvd = state.incomes.filter(i => i.date.slice(0, 7) === ym);
-  const received = recvd.reduce((s, i) => s + i.amount, 0);
-  const extras = recvd.filter(i => !i.rule_key || !sched.some(s => s.key === i.rule_key));
-  const expected = sched.reduce((s, i) => s + i.amount, 0) + extras.reduce((s, i) => s + i.amount, 0);
+  const ym = state.incomeMonth || L.monthOfCycle(curCycle());
+  const inc = L.monthIncomes(state.settings, state.incomes, ym);
+  const received = inc.items.filter(i => i.received).reduce((a, i) => a + i.amount, 0);
+  const M = mName(ym).replace(/^./, c => c.toUpperCase()) + (ym.slice(0, 4) === today().slice(0, 4) ? '' : ` de ${ym.slice(0, 4)}`);
+  const cyc = cycleForMonth(ym);
+  const inv = L.invoiceName(cyc, card(), today()).toLowerCase();
 
-  const c = card();
-  const dueISO = `${ym}-${String(c.due || 10).padStart(2, '0')}`;
-  const before = sched.filter(i => i.date <= dueISO).pop();
-  const dueCycle = L.cycleFor(L.addDays(dueISO, -((c.due || 10) > (c.closing || 1) ? (c.due - c.closing + 1) : 1)), c.closing || 1);
-  const invName = L.invoiceName(dueCycle, c, today()).toLowerCase();
-
-  const calTile = iso => `<div class="cal mute" role="img" aria-label="${longDay(iso)}"><span>${L.MONTHS_SHORT[+iso.slice(5, 7) - 1]}</span><span>${+iso.slice(8, 10)}</span></div>`;
-  const rows = sched.map(it => {
-    const got = recvd.find(i => i.rule_key === it.key);
-    return `<div class="list-row" style="gap:12px">
-      ${calTile(got ? got.date : it.date)}
-      <div style="flex:1;min-width:0;display:flex;flex-direction:column"><b>${esc(it.name)}</b><span class="small muted">${got ? 'recebida' : esc(it.why)}</span></div>
-      <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px">
-        <b>${money(got ? got.amount : it.amount)}</b>
-        ${got ? `<button class="btn small ghost" data-act="income-undo" data-id="${got.id}">Desfazer</button>` : `<button class="btn small soft" data-act="income-confirm" data-key="${esc(it.key)}" data-ym="${ym}">Confirmar</button>`}
-      </div></div>`;
-  }).join('') + extras.map(i => `<div class="list-row" style="gap:12px">${calTile(i.date)}
-      <div style="flex:1;min-width:0;display:flex;flex-direction:column"><b>${esc(i.name)}</b><span class="small muted">avulsa</span></div>
-      <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px"><b>${money(i.amount)}</b><button class="btn small ghost" data-act="income-undo" data-id="${i.id}">Apagar</button></div></div>`).join('');
+  const rows = inc.items.map(it => `<div class="lrow">
+      <span class="ic ${it.received ? 'ok' : ''}" style="flex-direction:column;gap:0;line-height:1.05"><b style="font-size:13px">${L.ddmm(it.date).slice(0, 2)}</b><small style="font-size:10px;font-weight:600">${L.MONTHS_SHORT[+it.date.slice(5, 7) - 1]}</small></span>
+      <span class="m"><b>${esc(it.name)}</b><small class="${it.received ? 'g' : ''}">${esc(incomeRef(it, ym))} · ${it.received ? 'recebida' : it.extra ? 'avulsa' : esc(it.why || '')}</small></span>
+      <span class="r"><b>${money(it.amount)}</b>${it.received
+        ? `<button class="pill ghost" data-act="income-undo" data-id="${it.id}">${it.extra ? 'Apagar' : 'Desfazer'}</button>`
+        : `<button class="pill" data-act="income-confirm" data-key="${esc(it.key)}" data-ym="${it.target}">Confirmar</button>`}</span>
+    </div>`).join('');
 
   const d = state.draft;
-  const ruleForms = (d.incomeRules || []).map((r, i) => `<div class="card" style="margin-top:10px">
-      <div class="edit-row" style="grid-template-columns:1fr 120px 36px;margin-top:0">
+  const ruleForms = (d.incomeRules || []).map((r, i) => `<div class="card" style="background:var(--raise);padding:14px;margin-top:10px">
+      <div class="edit-row" style="grid-template-columns:minmax(0,1fr) 120px 34px;margin-top:0">
         <input class="input" data-bind="incomeRules.${i}.name" value="${esc(r.name)}" aria-label="Nome da entrada">
         <input class="input" data-bind="incomeRules.${i}.amount" data-type="money" inputmode="decimal" value="${fmtIn(r.amount)}" aria-label="Valor esperado" placeholder="valor">
         <button class="icon-btn sm" data-act="del" data-path="incomeRules" data-i="${i}" aria-label="Remover entrada fixa">×</button>
       </div>
-      <div class="edit-row" style="grid-template-columns:1fr 80px;">
+      <div class="edit-row" style="grid-template-columns:minmax(0,1fr) 80px">
         <select class="input" data-bind="incomeRules.${i}.type" aria-label="Quando cai">
           <option value="businessDay" ${r.type === 'businessDay' ? 'selected' : ''}>Dia útil do mês (nº)</option>
           <option value="day" ${r.type === 'day' ? 'selected' : ''}>Dia fixo do mês</option>
         </select>
         <input class="input" data-bind="incomeRules.${i}.${r.type === 'businessDay' ? 'n' : 'day'}" data-type="int" inputmode="numeric" value="${r.type === 'businessDay' ? (r.n ?? 5) : (r.day ?? 20)}" aria-label="${r.type === 'businessDay' ? 'Qual dia útil' : 'Dia do mês'}">
       </div>
-      ${r.type === 'day' ? `<label class="check" style="margin-top:4px"><input type="checkbox" data-bind="incomeRules.${i}.shift" data-type="shift" ${r.shift !== 'after' ? 'checked' : ''}> Se cair em fim de semana ou feriado, vem antes</label>` : ''}
-      <label class="check" style="margin-top:4px;white-space:normal"><input type="checkbox" data-bind="incomeRules.${i}.monthOffset" data-type="offset" ${Number(r.monthOffset) === 1 ? 'checked' : ''}> Cai no mês seguinte ao de referência (ex.: o salário de outubro cai em novembro)</label>
+      ${r.type === 'day' ? `<label class="check" style="margin-top:10px"><input type="checkbox" data-bind="incomeRules.${i}.shift" data-type="shift" ${r.shift !== 'after' ? 'checked' : ''}> Se cair em fim de semana ou feriado, vem antes</label>` : ''}
+      <label class="check" style="margin-top:10px"><input type="checkbox" data-bind="incomeRules.${i}.monthOffset" data-type="offset" ${Number(r.monthOffset) === 1 ? 'checked' : ''}> Cai no mês seguinte ao da folha (ex.: o salário de novembro cai no 5º dia útil de dezembro)</label>
     </div>`).join('');
 
-  return `${pageHead('Entradas', '<button class="btn small ghost" data-act="view" data-v="ajustes" style="padding:0;min-height:0;border:0">‹ Ajustes</button>', headActions({ upload: false }))}
+  return `${pageHead('Entradas', 'salário, vintena e recebimentos avulsos', headActions({ upload: false }))}
     <div class="cycle">
       <button class="icon-btn sm" data-act="inc-month" data-d="-1" aria-label="Mês anterior">‹</button>
-      <b>${L.MONTHS[m - 1].replace(/^./, ch => ch.toUpperCase())} de ${y}</b>
+      <div class="lbl"><b>Folha de ${mName(ym)}</b><span>paga o mês de ${mName(ym)} e a ${esc(inv)}</span></div>
       <button class="icon-btn sm" data-act="inc-month" data-d="1" aria-label="Próximo mês">›</button>
     </div>
-    <div class="k" style="margin-top:16px">Previsto no mês</div>
-    <div class="big md">${money(expected)}</div>
-    <div class="small muted">Recebido até agora <b style="color:var(--text)">${money(received)}</b></div>
-    <h2 class="h2">Este mês</h2>
-    ${rows || '<p class="help">Nenhuma entrada fixa configurada. Adicione abaixo.</p>'}
-    <button class="row add" data-act="lancar" data-mode="entrada">Registrar outra entrada</button>
-    ${before ? `<div class="card soft" style="font-size:14px">${esc(before.name)} de <b>${L.ddmm(before.date)}</b> paga a ${esc(invName)}, que vence em <b>${L.ddmm(dueISO)}</b>${L.daysBetween(before.date, dueISO) <= 1 ? '. Folga de um dia só: se a entrada atrasar, a fatura atrasa junto.' : '.'}</div>`
-      : sched.length ? `<div class="card soft" style="font-size:14px">Nenhuma entrada cai antes do vencimento da fatura (${L.ddmm(dueISO)}).</div>` : ''}
-
-    <h2 class="h2">Entradas fixas</h2>
-    <p class="help">O valor é o esperado; ao confirmar, você ajusta o que caiu de fato.</p>
-    ${ruleForms}
-    <button class="row add" data-act="add" data-path="incomeRules">Adicionar entrada fixa</button>
-    <div class="actions"><button class="btn primary" data-act="save-draft">Salvar entradas fixas</button></div>`;
+    <section class="card">
+      <div style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:flex-end;gap:12px">
+        <div style="display:flex;flex-direction:column;gap:4px"><span class="k">Previsto para ${M}</span><span class="big md">${money(inc.total)}</span></div>
+        <span class="small muted">Recebido até agora <b style="color:var(--text)">${money(received)}</b></span>
+      </div>
+      <div style="margin-top:10px">${rows || '<p class="help">Nenhuma entrada fixa configurada. Adicione abaixo.</p>'}</div>
+      <div class="actions"><button class="btn soft small" data-act="inc-add" data-ym="${ym}">+ Recebimento avulso (13º, freela…)</button></div>
+    </section>
+    <section class="card">
+      <div class="card-head"><h2>Entradas fixas</h2></div>
+      <p class="help">O valor é o esperado. Ao confirmar, você ajusta o que caiu de fato.</p>
+      ${ruleForms}
+      <button class="row add" data-act="add" data-path="incomeRules">Adicionar entrada fixa</button>
+      <div class="actions"><button class="btn primary" data-act="save-draft">Salvar entradas fixas</button></div>
+    </section>`;
 }
 
 // ---------------- eventos ----------------
@@ -974,15 +1060,15 @@ document.addEventListener('click', async e => {
   const closing = card().closing || 1;
   switch (act) {
     case 'retry': return enter(state.user);
-    case 'view':
-      if (['ajustes', 'entradas'].includes(el.dataset.v) && !['ajustes', 'entradas'].includes(state.view)) startDraft();
-      if (!['ajustes', 'entradas'].includes(el.dataset.v)) state.draft = null;
-      state.view = el.dataset.v; state.filter = 'all'; state.q = ''; render(); window.scrollTo(0, 0); return;
+    case 'view': if (el.dataset.v === state.view) { window.scrollTo(0, 0); return; } return go(el.dataset.v);
+    case 'back': return goBack();
+    case 'batch-undo': return undoBatchSheet(el.dataset.k);
+    case 'batch-dismiss': state.lastBatch = null; return render();
     case 'upload': return pickFile();
     case 'lancar': return lancarSheet(el.dataset.mode || 'gasto');
     case 'prev': state.cycle = L.shiftCycle(state.cycle.start, -1, closing); return render();
     case 'next': if (state.cycle.start < curCycle().start) { state.cycle = L.shiftCycle(state.cycle.start, 1, closing); render(); } return;
-    case 'classify': state.cycle = curCycle(); state.view = 'gastos'; state.filter = 'unc'; render(); window.scrollTo(0, 0); return;
+    case 'classify': return go('gastos', { filter: 'unc', cycle: curCycle() });
     case 'priv':
       state.priv = !state.priv;
       try { localStorage.setItem('mf-priv', state.priv ? '1' : '0'); } catch (e2) {}
@@ -996,7 +1082,7 @@ document.addEventListener('click', async e => {
       if (await saveSettings(next)) { const y = window.scrollY; render(); window.scrollTo(0, y); }
       return;
     }
-    case 'card-open': state.cycle = curCycle(); state.view = 'gastos'; state.filter = 'src:' + el.dataset.id; state.q = ''; render(); window.scrollTo(0, 0); return;
+    case 'card-open': return go('gastos', { filter: 'src:' + el.dataset.id, cycle: curCycle() });
     case 'pc-amt': state.pc.amt = Number(el.dataset.v); return refreshPC();
     case 'pc-cat': state.pc.cat = el.dataset.v; return refreshPC();
     case 'home-tab': state.homeTab = el.dataset.v; { const y = window.scrollY; render(); window.scrollTo(0, y); } return;
@@ -1016,8 +1102,7 @@ document.addEventListener('click', async e => {
     case 'export': return exportAll();
     case 'logout': return sb.auth.signOut();
     case 'inc-month': {
-      const base = (state.incomeMonth || today().slice(0, 7)) + '-01';
-      state.incomeMonth = L.addMonths(base, Number(el.dataset.d)).slice(0, 7); return render();
+      state.incomeMonth = L.ymAdd(state.incomeMonth || L.monthOfCycle(curCycle()), Number(el.dataset.d)); return render();
     }
     case 'income-confirm': return confirmIncomeSheet(el.dataset.key, el.dataset.ym);
     case 'income-undo': return undoIncome(Number(el.dataset.id));
@@ -1031,8 +1116,8 @@ document.addEventListener('click', async e => {
     }
     case 'inc-add': return lancarSheet('entrada', dateInMonth(el.dataset.ym));
     case 'inc-edit': return incomeEditSheet(el.dataset.ym || L.monthOfCycle(state.cycle));
-    case 'fix-edit': state.view = 'contas'; render(); window.scrollTo(0, 0); return;
-    case 'cat-open': if (state.view === 'home') state.cycle = curCycle(); state.view = 'gastos'; state.filter = 'cat:' + el.dataset.c; state.q = ''; render(); window.scrollTo(0, 0); return;
+    case 'fix-edit': return go('contas');
+    case 'cat-open': return go('gastos', { filter: 'cat:' + el.dataset.c, cycle: state.view === 'home' ? curCycle() : null });
     case 'suggest': return suggestSheet();
     case 'fix-pay': return payFixed(Number(el.dataset.i), el.dataset.ym);
     case 'fix-unpay': return txSheet(Number(el.dataset.id));
@@ -1175,10 +1260,17 @@ async function undoIncome(id) {
 function openSheet(html, onMount) {
   const bg = document.createElement('div');
   bg.className = 'sheet-bg';
-  bg.innerHTML = `<div class="sheet" role="dialog" aria-modal="true"><div class="grab"></div>${html}</div>`;
+  bg.innerHTML = `<div class="sheet" role="dialog" aria-modal="true"><div class="grab"></div><button type="button" class="sheet-x" data-close aria-label="Fechar">${icon('x', 18, 2.2)}</button>${html}</div>`;
   document.body.appendChild(bg);
+  document.body.classList.add('noscroll');
   const prevFocus = document.activeElement;
-  const close = () => { bg.remove(); document.removeEventListener('keydown', onKey); prevFocus && prevFocus.focus && prevFocus.focus(); };
+  const close = () => {
+    const i = sheets.indexOf(close); if (i >= 0) sheets.splice(i, 1);
+    bg.remove(); document.removeEventListener('keydown', onKey);
+    if (!sheets.length) document.body.classList.remove('noscroll');
+    prevFocus && prevFocus.focus && prevFocus.focus();
+  };
+  sheets.push(close);
   const onKey = e => { if (e.key === 'Escape') close(); };
   document.addEventListener('keydown', onKey);
   bg.addEventListener('click', e => { if (e.target === bg || e.target.closest('[data-close]')) close(); });
@@ -1186,7 +1278,7 @@ function openSheet(html, onMount) {
   sh.$ = sel => sh.querySelector(sel);
   sh.$$ = sel => [...sh.querySelectorAll(sel)];
   onMount && onMount(sh, close);
-  (sh.querySelector('[autofocus]') || sh.querySelector('button, input'))?.focus();
+  (sh.querySelector('[autofocus]') || sh.querySelector('input, select, button:not(.sheet-x)'))?.focus();
   return { sh, close };
 }
 
@@ -1207,7 +1299,7 @@ function pickFile() {
     if (f.size > 15e6) return toast('Arquivo grande demais para uma fatura.');
     let text;
     try {
-      if (/\.xlsx$/i.test(f.name)) { const X = await import('./xlsx.js?v=20261117c'); text = await X.xlsxToCSV(await f.arrayBuffer()); }
+      if (/\.xlsx$/i.test(f.name)) { const X = await import('./xlsx.js?v=20261117d'); text = await X.xlsxToCSV(await f.arrayBuffer()); }
       else if (/\.xls$/i.test(f.name)) return toast('Arquivo .xls antigo: abra no Excel e salve como .xlsx ou CSV.');
       else text = await f.text();
     } catch (err) { return toast('Não consegui ler o arquivo: ' + (err.message || err)); }
@@ -1270,8 +1362,11 @@ function uploadSheet(fileName, parsed) {
       await loadTxs();
       const latest = fresh.reduce((m, r) => (r.date > m ? r.date : m), fresh[0].date);
       state.cycle = L.cycleFor(latest, card().closing || 1);
-      state.view = 'home';
-      close(); render();
+      const mine = new Set(fresh.map(r => r.uid));
+      const b = batches().find(x => x.ids.some(id => mine.has((state.txs.find(t => t.id === id) || {}).uid)));
+      state.lastBatch = b ? b.key : null;
+      close();
+      if (state.view !== 'home') go('home'); else render();
       toast(`${fresh.length} ${fresh.length === 1 ? 'compra adicionada' : 'compras adicionadas'}.`);
     });
     update();
@@ -1444,7 +1539,7 @@ function incomeEditSheet(ym) {
     <div class="actions"><button class="btn primary grow" data-save>Salvar</button><button class="btn ghost" data-close>Cancelar</button></div>`;
   openSheet(html, (sh, close) => {
     sh.$('[data-add]').addEventListener('click', () => { close(); lancarSheet('entrada', dateInMonth(ym)); });
-    sh.$('[data-more]').addEventListener('click', () => { close(); startDraft(); state.view = 'entradas'; state.incomeMonth = ym; render(); window.scrollTo(0, 0); });
+    sh.$('[data-more]').addEventListener('click', () => { close(); state.incomeMonth = ym; go('entradas'); });
     sh.$$('[data-del]').forEach(b => b.addEventListener('click', async () => { await undoIncome(Number(b.dataset.del)); close(); incomeEditSheet(ym); }));
     sh.$('[data-save]').addEventListener('click', async () => {
       const next = structuredClone(state.settings);
@@ -1568,10 +1663,7 @@ function menuSheet() {
     <div class="actions"><button class="btn ghost grow" data-close>Fechar</button></div>`;
   openSheet(html, (sh, close) => {
     sh.$$('[data-go]').forEach(b => b.addEventListener('click', () => {
-      close();
-      const v = b.dataset.go;
-      if (['ajustes', 'entradas'].includes(v)) startDraft(); else state.draft = null;
-      state.view = v; render(); window.scrollTo(0, 0);
+      close(); go(b.dataset.go);
     }));
     sh.$$('[data-th]').forEach(b => b.addEventListener('click', () => { close(); setTheme(b.dataset.th); }));
   });
