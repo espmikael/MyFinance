@@ -1,5 +1,5 @@
-import * as L from './logic.js?v=20261117k';
-import { SUPABASE_URL, SUPABASE_ANON_KEY } from './config.js?v=20261117k';
+import * as L from './logic.js?v=20261117l';
+import { SUPABASE_URL, SUPABASE_ANON_KEY } from './config.js?v=20261117l';
 
 const $app = document.getElementById('app');
 const $toast = document.getElementById('toast');
@@ -448,25 +448,22 @@ function weekHero(s) {
   }).join('');
   const up = lastUploadDay();
   if (monthOver) return `<div class="kcard hero week zero">
-      <span class="r1"><span class="kl">Dia a dia acima do limite do mês</span><span class="kl" style="opacity:.9">até ${L.ddmm(s.cycle.end)}</span></span>
+      <span class="kl">Acima do limite do mês</span>
       <span class="kv">${money(s.freeSpent - s.freeBudget)}</span>
-      <span class="ks">gasto ${money(s.freeSpent)} de um limite de <b>${money(s.freeBudget)}</b>. Não sobrou valor para liberar nesta semana.</span>
-      <div class="weekbars" aria-label="Gasto por dia da semana">${bars}</div>
+      <span class="ks">gasto ${money(s.freeSpent)} · limite ${money(s.freeBudget)}</span>
       <div class="wfoot">
-        <span><span>Nesta semana (${L.ddmm(w.start)}–${L.ddmm(w.end)})</span><b>${money(w.spent)}</b></span>
-        <span><span>Cartão conferido até</span><b>${up ? `${L.weekdayShort(up)} ${L.ddmm(up)}` : 'nenhum envio'}</b></span>
-        <span><span>Até ${L.ddmm(s.cycle.end)}, cada real no cartão vira dívida</span><b></b></span>
+        <span><span>Esta semana</span><b>${money(w.spent)}</b></span>
+        <span><span>Faturas enviadas até</span><b>${up ? `${L.weekdayShort(up)} ${L.ddmm(up)}` : '—'}</b></span>
       </div>
     </div>`;
   return `<div class="kcard hero week ${over ? 'zero' : ''}">
       <span class="r1"><span class="kl">${over ? 'Passou nesta semana' : 'Resta nesta semana'}</span><span class="kl" style="opacity:.9">${L.weekdayShort(w.start)} ${L.ddmm(w.start)} – ${L.weekdayShort(w.end)} ${L.ddmm(w.end)}</span></span>
       <span class="kv">${money(Math.abs(w.left))}</span>
-      <span class="ks">de <b>${money(w.limit)}</b> liberados · já foi ${money(w.spent)}</span>
+      <span class="ks">de ${money(w.limit)} · gasto ${money(w.spent)}</span>
       <div class="weekbars" aria-label="Gasto por dia da semana">${bars}</div>
       <div class="wfoot">
-        <span><span>${over ? 'O que passou sai das próximas semanas' : `Por dia até ${L.weekdayShort(w.end) === 'dom' ? 'domingo' : L.ddmm(w.end)}`}</span><b>${over ? '' : '≈ ' + money(w.perDay)}</b></span>
-        <span><span>Cartão conferido até</span><b>${up ? `${L.weekdayShort(up)} ${L.ddmm(up)}` : 'nenhum envio'}</b></span>
-        ${s.committed > 0 ? `<span><span>Parcelas e assinaturas (fora da semana)</span><b>${money(s.committed)}</b></span>` : ''}
+        ${over ? '' : `<span><span>Por dia até ${L.weekdayShort(w.end) === 'dom' ? 'domingo' : L.ddmm(w.end)}</span><b>${money(w.perDay)}</b></span>`}
+        <span><span>Faturas enviadas até</span><b>${up ? `${L.weekdayShort(up)} ${L.ddmm(up)}` : '—'}</b></span>
       </div>
     </div>`;
 }
@@ -1519,7 +1516,7 @@ function pickFile() {
     if (f.size > 15e6) return toast('Arquivo grande demais para uma fatura.');
     let text;
     try {
-      if (/\.xlsx$/i.test(f.name)) { const X = await import('./xlsx.js?v=20261117k'); text = await X.xlsxToCSV(await f.arrayBuffer()); }
+      if (/\.xlsx$/i.test(f.name)) { const X = await import('./xlsx.js?v=20261117l'); text = await X.xlsxToCSV(await f.arrayBuffer()); }
       else if (/\.xls$/i.test(f.name)) return toast('Arquivo .xls antigo: abra no Excel e salve como .xlsx ou CSV.');
       else text = await f.text();
     } catch (err) { return toast('Não consegui ler o arquivo: ' + (err.message || err)); }
