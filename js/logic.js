@@ -49,11 +49,15 @@ export const METHODS = [
 
 export const DEFAULT_SETTINGS = {
   cards: [
-    { id: 'nubank', name: 'Nubank', closing: 3, due: 10, color: '#9085e9', primary: true },
-    { id: 'inter', name: 'Inter', closing: null, due: null, color: '#d95926', primary: false },
+    { id: 'nubank', name: 'Nubank', closing: 3, due: 10, color: '#820AD1', primary: true },
+    { id: 'inter', name: 'Inter', closing: null, due: null, color: '#FF7A00', primary: false },
   ],
-  version: 2,
-  fixed: [],              // gastos fora do cartão: [{ name, value, category }]
+  version: 3,
+  // contas: [{ id, name, kind: 'exact'|'estimate', value, day, category, pay, match, basis, parcels: { total, current, ym } | null }]
+  // pay = 'pix' | 'boleto' | 'debito' | 'dinheiro' | id de um cartão (aí ela já entra pela fatura)
+  fixed: [],
+  hiddenCards: [],        // cartões escondidos no Início
+  balance: null,          // { value, date }: saldo na conta, para a agenda do dinheiro
   incomeRules: [
     { key: 'vintena', name: 'Vintena', type: 'day', day: 20, shift: 'before', amount: 0, monthOffset: 0 },
     { key: 'salario', name: 'Salário', type: 'businessDay', n: 5, amount: 0, monthOffset: 1 },
@@ -120,6 +124,16 @@ export function withDefaults(saved) {
   if (saved && saved.closingDay && !saved.cards) s.cards[0].closing = saved.closingDay;
   if (!Array.isArray(s.cards) || !s.cards.length) s.cards = structuredClone(DEFAULT_SETTINGS.cards);
   if (!s.cards.some(c => c.primary)) s.cards[0].primary = true;
+  // v3: contas ganham tipo, forma de pagamento e parcelas; cores reais dos cartões
+  const OLD_COLORS = { nubank: '#9085e9', inter: '#d95926' };
+  s.cards = s.cards.map(c => (OLD_COLORS[c.id] && c.color === OLD_COLORS[c.id] ? { ...c, color: DEFAULT_SETTINGS.cards.find(d => d.id === c.id).color } : c));
+  s.fixed = (s.fixed || []).map((f, i) => ({
+    id: f.id || 'c' + i + '-' + slug(f.name || 'conta').slice(0, 12),
+    name: f.name || '', kind: f.kind || 'exact', value: Number(f.value) || 0, day: f.day ?? null,
+    category: f.category || fixedCategoryGuess(f.name), pay: f.pay || 'pix', match: f.match || '',
+    basis: f.basis || 'avg', parcels: f.parcels || null,
+  }));
+  if (!Array.isArray(s.hiddenCards)) s.hiddenCards = [];
   // salário cai no mês seguinte ao de referência; as demais entradas, no próprio mês
   s.incomeRules = (s.incomeRules || []).map(r => (r.monthOffset == null ? { ...r, monthOffset: r.key === 'salario' ? 1 : 0 } : r));
   return s;
@@ -246,12 +260,15 @@ export function parseInvoiceCSV(text) {
 
   const bank = header.join(',') === 'date,title,amount' ? 'nubank' : null;
   const iD = findCol(header, DATE_COLS), iT = findCol(header, TITLE_COLS), iA = findCol(header, AMOUNT_COLS);
+  const iP = header.findIndex(h => h === 'tipo' || h === 'parcela' || h === 'parcelas');
 
   let rows = [];
   for (const line of lines.slice(headerIdx + 1)) {
     const cols = splitCSVLine(line, sep);
     const date = toISODate(cols[iD]);
-    const title = String(cols[iT] ?? '').trim();
+    let title = String(cols[iT] ?? '').trim();
+    const pm = iP >= 0 && String(cols[iP] ?? '').match(/(\d+)\s*(?:de|\/)\s*(\d+)/i);
+    if (pm && !/parcela \d+\/\d+/i.test(title) && Number(pm[2]) > 1) title += ` - Parcela ${Number(pm[1])}/${Number(pm[2])}`;
     const amount = round(parseAmount(cols[iA]));
     if (!date || !title || !Number.isFinite(amount)) continue;
     rows.push({ date, title, amount });
@@ -471,9 +488,10 @@ export function monthIncomes(settings, incomes, ym) {
 // Liga cada fixo a um pagamento do mês: mesma rubrica e (nome na descrição, ou lançado à mão com valor parecido).
 export function matchFixed(fixed, txs, ym) {
   const used = new Set();
-  return (fixed || []).map((f, i) => {
+  return (fixed || []).map((f, j) => {
+    const i = f.index ?? j;
     const value = Number(f.value) || 0;
-    const name = normalize(f.name);
+    const name = normalize(f.match || f.name);
     const pool = txs.filter(t => !used.has(t) && t.cat === f.category && t.amount > 0);
     const hit = pool.find(t => t.uid && t.uid.startsWith(`fixed|${i}|${ym}|`))
       || pool.find(t => name && normalize(t.title).includes(name))
@@ -498,12 +516,12 @@ export function summarize({ txs, rules, settings, cycle, today, incomes = [] }) 
 
   // o mês do ciclo (o do vencimento): as entradas e os fixos que esta fatura disputa
   const ym = monthOfCycle(cycle);
-  const fixedItems = matchFixed(settings.fixed, monthTx(ym), ym);
+  const fixedItems = matchFixed(billsOut(settings, ym, txs, rules), monthTx(ym), ym);
 
   // pagamentos de fixo contam no mês deles, não no ciclo em que a data caiu
   const fixedTx = new Set();
   for (const m of new Set([cycle.start.slice(0, 7), cycle.end.slice(0, 7)]))
-    for (const f of matchFixed(settings.fixed, monthTx(m), m)) if (f.tx) fixedTx.add(txKey(f.tx));
+    for (const f of matchFixed(billsOut(settings, m, txs, rules), monthTx(m), m)) if (f.tx) fixedTx.add(txKey(f.tx));
 
   const inCycle = txs.filter(t => t.date >= cycle.start && t.date <= cycle.end).map(withCat)
     .map(t => (fixedTx.has(txKey(t)) ? { ...t, isFixed: true } : t));
@@ -627,4 +645,209 @@ export function installmentRows({ date, title, amount, n, source, category }) {
     source, category: category || null, manual: true,
     uid: `manual|${stamp}|${i + 1}`,
   }));
+}
+
+// ---------- contas (exatas e estimadas) ----------
+const ymOf = iso => iso.slice(0, 7);
+export function ymDiff(a, b) {
+  const [ay, am] = a.split('-').map(Number), [by, bm] = b.split('-').map(Number);
+  return (by - ay) * 12 + (bm - am);
+}
+export const ymAdd = (ym, n) => addMonths(`${ym}-01`, n).slice(0, 7);
+export const isCardPay = (b, settings) => settings.cards.some(c => c.id === b.pay);
+
+// Parcela de uma conta no mês ym (null = sem parcelas, repete todo mês).
+export function billParcel(b, ym) {
+  const p = b.parcels;
+  if (!p || !Number(p.total)) return null;
+  const total = Number(p.total), n = Number(p.current || 1) + ymDiff(p.ym || ym, ym);
+  return { n, total, active: n >= 1 && n <= total, endYM: ymAdd(p.ym || ym, total - Number(p.current || 1)) };
+}
+
+// Pagamentos que parecem desta conta nos meses anteriores a ym (para a média das estimadas).
+export function billHistory(b, txs, rules, ym, months = 3) {
+  const kw = normalize(b.match || b.name);
+  if (!kw) return [];
+  const byMonth = {};
+  const lo = ymAdd(ym, -12);
+  for (const t of txs) {
+    const m = ymOf(t.date);
+    if (m >= ym || m < lo || Number(t.amount) <= 0) continue;
+    if (!normalize(t.title).includes(kw) && !normalize(prettyTitle(t.title)).includes(kw)) continue;
+    if (categoryOf(t, rules) === IGNORE) continue;
+    byMonth[m] = round((byMonth[m] || 0) + Number(t.amount));
+  }
+  return Object.keys(byMonth).sort().slice(-months).map(m => ({ ym: m, value: byMonth[m] }));
+}
+
+export function billValueFor(b, ym, txs, rules) {
+  if (b.kind === 'estimate') {
+    const h = billHistory(b, txs, rules, ym);
+    if (h.length) {
+      const v = h.map(x => x.value);
+      return round(b.basis === 'max' ? Math.max(...v) : v.reduce((a, c) => a + c, 0) / v.length);
+    }
+  }
+  return Number(b.value) || 0;
+}
+
+// Contas ativas no mês ym, com o valor do mês.
+export function billsFor(settings, ym, txs, rules) {
+  return (settings.fixed || []).map((b, index) => ({ ...b, index, parcel: billParcel(b, ym) }))
+    .filter(b => !b.parcel || b.parcel.active)
+    .map(b => ({
+      ...b,
+      value: billValueFor(b, ym, txs, rules),
+      history: b.kind === 'estimate' ? billHistory(b, txs, rules, ym) : [],
+      onCard: isCardPay(b, settings),
+    }));
+}
+// As que saem da conta (fora do cartão): entram no mês como "fixos".
+export function billsOut(settings, ym, txs, rules) {
+  return billsFor(settings, ym, txs, rules).filter(b => !b.onCard);
+}
+
+// Compras parceladas no cartão ("Parcela 3/5") projetadas para o mês ym.
+// A parcela pertence à fatura em que ela apareceu: a do lote de envio (mesmo created_at), não a da data da compra.
+const PARC_RE = /\s*-\s*parcela\s*(\d+)\s*\/\s*(\d+)\s*$/i;
+export function cardInstallments(txs, rules, settings, ym) {
+  const prim = primaryCard(settings);
+  const closingOf = src => (settings.cards.find(c => c.id === src) || prim).closing || prim.closing || 1;
+  const batchMax = {};
+  for (const t of txs) {
+    if (t.manual || !t.created_at) continue;
+    const k = (t.source || 'nubank') + '|' + t.created_at.slice(0, 16);
+    if (!batchMax[k] || t.date > batchMax[k]) batchMax[k] = t.date;
+  }
+  const series = new Map();
+  for (const t of txs) {
+    if (t.manual) continue;
+    const m = String(t.title).match(PARC_RE);
+    if (!m) continue;
+    const k = +m[1], n = +m[2];
+    if (!(n > 1)) continue;
+    const src = t.source || 'nubank';
+    const anchor = (t.created_at && batchMax[src + '|' + t.created_at.slice(0, 16)]) || t.date;
+    const anchorYM = monthOfCycle(cycleFor(anchor, closingOf(src)));
+    const base = normalize(t.title.slice(0, m.index));
+    const key = `${src}|${base}|${n}|${Number(t.amount).toFixed(2)}`;
+    const first = ymAdd(anchorYM, -(k - 1));
+    const cur = series.get(key);
+    if (!cur || first > cur.first) series.set(key, { t, n, first, src });
+  }
+  const out = [];
+  for (const s of series.values()) {
+    const k = ymDiff(s.first, ym) + 1;
+    if (k < 1 || k > s.n) continue;
+    out.push({
+      id: 'auto-' + slug(s.t.title).slice(0, 30), auto: true, kind: 'exact',
+      name: prettyTitle(s.t.title.replace(PARC_RE, '')), value: round(Number(s.t.amount)),
+      category: categoryOf(s.t, rules), pay: s.src, onCard: true,
+      parcel: { n: k, total: s.n, active: true, endYM: ymAdd(s.first, s.n - 1) },
+    });
+  }
+  return out;
+}
+
+// Quanto o mês ym já começa comprometido, e se os tetos cabem no que sobra.
+export function monthPlan({ settings, txs, rules, incomes, ym }) {
+  const bills = billsFor(settings, ym, txs, rules);
+  const named = bills.filter(b => b.onCard).map(b => normalize(b.match || b.name));
+  const auto = cardInstallments(txs, rules, settings, ym).filter(a => !named.some(k => k && normalize(a.name).includes(k)));
+  const all = [...bills, ...auto];
+  const sum = l => round(l.reduce((a, b) => a + (Number(b.value) || 0), 0));
+  const exact = all.filter(b => b.kind !== 'estimate'), est = all.filter(b => b.kind === 'estimate');
+  const exactOut = sum(exact.filter(b => !b.onCard)), estOut = sum(est.filter(b => !b.onCard)), onCard = sum(all.filter(b => b.onCard));
+  const income = monthIncomes(settings, incomes, ym).total;
+  const committed = round(exactOut + estOut + onCard);
+  const free = round(income - committed);
+  let need = 0;
+  for (const c of settings.categories || []) {
+    if (c.fixed || !(Number(c.budget) > 0)) continue;
+    const inside = sum(all.filter(b => b.onCard && b.category === c.name));
+    need += Math.max(0, Number(c.budget) - inside);
+  }
+  need = round(need);
+  return { ym, exact, est, all, exactOut, estOut, onCard, income, committed, free, tetoNeed: need, slack: round(free - need) };
+}
+
+// Fatura aberta de cada cartão.
+export function cardInvoices(settings, txs, rules, today) {
+  const prim = primaryCard(settings);
+  return settings.cards.map(c => {
+    const conf = !!c.closing;
+    const ref = conf ? c : prim;
+    const closing = ref.closing || 1;
+    const cycle = cycleFor(today, closing);
+    const due = dueDateFor(cycle, { closing, due: (conf ? c.due : prim.due) || 10 });
+    const sumOf = cy => round(txs.filter(t => (t.source || 'nubank') === c.id && t.date >= cy.start && t.date <= cy.end && categoryOf(t, rules) !== IGNORE)
+      .reduce((a, t) => a + Number(t.amount), 0));
+    const prev = shiftCycle(cycle.start, -1, closing);
+    const prevDue = dueDateFor(prev, { closing, due: (conf ? c.due : prim.due) || 10 });
+    return {
+      card: c, configured: conf, cycle, due, total: sumOf(cycle),
+      len: daysBetween(cycle.start, cycle.end) + 1, elapsed: daysBetween(cycle.start, today) + 1,
+      daysToClose: daysBetween(today, cycle.end) + 1,
+      prev: { cycle: prev, due: prevDue, total: sumOf(prev), unpaid: today <= prevDue },
+    };
+  });
+}
+
+// Agenda do dinheiro: o que entra e sai da conta corrente nas próximas semanas, com o saldo depois de cada dia.
+export function moneyAgenda({ settings, txs, rules, incomes, today, days = 35, primaryProjection = null }) {
+  const end = addDays(today, days);
+  const ev = [];
+  const inWin = d => d >= today && d <= end;
+  // entradas fixas ainda não recebidas
+  for (let k = 0; k <= 1; k++) {
+    const ym = ymAdd(ymOf(today), k);
+    const [y, m] = ym.split('-').map(Number);
+    for (const it of incomeSchedule(settings.incomeRules, y, m)) {
+      if (!inWin(it.date) || !(it.amount > 0)) continue;
+      if ((incomes || []).some(i => i.rule_key === it.key && ymOf(i.date) === ym)) continue;
+      ev.push({ date: it.date, kind: 'in', title: it.name, sub: 'entrada · ' + it.why, amount: it.amount });
+    }
+  }
+  // contas que saem da conta
+  for (let k = 0; k <= 1; k++) {
+    const ym = ymAdd(ymOf(today), k);
+    const matched = matchFixed(billsOut(settings, ym, txs, rules), txs.filter(t => ymOf(t.date) === ym).map(t => ({ ...t, cat: categoryOf(t, rules) })), ym);
+    for (const b of billsOut(settings, ym, txs, rules)) {
+      if (!b.day) continue;
+      const last = new Date(Date.UTC(+ym.slice(0, 4), +ym.slice(5, 7), 0)).getUTCDate();
+      const date = `${ym}-${String(Math.min(b.day, last)).padStart(2, '0')}`;
+      if (!inWin(date) || matched.find(f => f.index === b.index && f.paid)) continue;
+      const p = b.parcel ? ` · parcela ${b.parcel.n} de ${b.parcel.total}` : '';
+      ev.push({ date, kind: 'out', title: b.name, sub: (b.kind === 'estimate' ? 'conta estimada' : 'conta') + p, amount: -b.value });
+    }
+  }
+  // faturas dos cartões
+  for (const inv of cardInvoices(settings, txs, rules, today)) {
+    const name = inv.card.name;
+    if (inv.prev.unpaid && inv.prev.total > 0 && inWin(inv.prev.due))
+      ev.push({ date: inv.prev.due, kind: 'out', title: `Fatura ${name} vence`, sub: 'fatura fechada', amount: -inv.prev.total });
+    if (inv.configured && inWin(addDays(inv.cycle.end, 1))) ev.push({ date: addDays(inv.cycle.end, 1), kind: 'info', title: `${name} fecha a fatura`, sub: 'compras depois disso vão para a próxima', amount: 0 });
+    if (inWin(inv.due)) {
+      const proj = inv.card.primary && primaryProjection != null ? primaryProjection : inv.total;
+      const sub = !inv.configured ? 'datas do cartão não configuradas: usei as do principal'
+        : inv.card.primary && primaryProjection != null ? 'projeção da fatura aberta' : 'fatura aberta até agora';
+      if (proj > 0) ev.push({ date: inv.due, kind: 'out', title: `Fatura ${name} vence`, sub, amount: -round(proj) });
+    }
+  }
+  ev.sort((a, b) => a.date.localeCompare(b.date) || (a.kind === 'in' ? -1 : 1));
+  const bal = settings.balance && Number.isFinite(Number(settings.balance.value)) ? Number(settings.balance.value) : null;
+  let run = bal, min = null;
+  for (const e of ev) {
+    if (run == null) continue;
+    run = round(run + e.amount);
+    e.balance = run;
+    if (e.kind !== 'info' && (min == null || run < min.balance)) min = { date: e.date, balance: run };
+  }
+  // sugestão: quanto separar da última entrada antes do ponto mais baixo
+  let tip = null;
+  if (min && min.balance < 0) {
+    const before = ev.filter(e => e.kind === 'in' && e.date <= min.date).pop();
+    tip = { need: Math.ceil(-min.balance / 10) * 10, from: before ? before.title : null, fromDate: before ? before.date : null };
+  }
+  return { events: ev, start: bal, balanceDate: settings.balance ? settings.balance.date : null, min, tip };
 }
