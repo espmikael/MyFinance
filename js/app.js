@@ -1,5 +1,5 @@
-import * as L from './logic.js?v=20261117h';
-import { SUPABASE_URL, SUPABASE_ANON_KEY } from './config.js?v=20261117h';
+import * as L from './logic.js?v=20261117i';
+import { SUPABASE_URL, SUPABASE_ANON_KEY } from './config.js?v=20261117i';
 
 const $app = document.getElementById('app');
 const $toast = document.getElementById('toast');
@@ -331,6 +331,7 @@ function viewHome(s) {
     ${lastBatchNotice()}
     ${uploadNudge()}
     ${s.toClassify.length ? `<div class="notice"><span>${s.toClassify.length === 1 ? '1 compra sem rubrica' : `${s.toClassify.length} compras sem rubrica`}. Ao classificar, o app aprende para as próximas.</span><button class="btn small" data-act="classify">Classificar</button></div>` : ''}
+    ${(() => { const c = state.settings.cards.find(c => !c.primary && !c.closing && state.txs.some(t => (t.source || 'nubank') === c.id)); return c ? `<div class="notice"><span>Informe o dia em que a fatura do ${esc(c.name)} fecha. Sem ele, as compras do ${esc(c.name)} entram pela data da compra e podem cair no mês errado.</span><button class="btn small" data-act="view" data-v="ajustes">Ajustes</button></div>` : ''; })()}
     ${s.income <= 0 ? `<div class="notice info"><span>Informe suas entradas para o app calcular o limite do mês.</span><button class="btn small" data-act="view" data-v="mes">Entradas</button></div>` : ''}
     ${homeNumbers(s)}
     ${prevOver}
@@ -351,7 +352,7 @@ function weekReview(s) {
   const up = lastUploadDay();
   if (gone || !up || up < prev.end) return '';
   const diff = prev.spent - prev.limit;
-  const inWeek = ps.txs.filter(t => t.date >= prev.start && t.date <= prev.end && !t.isFixed && !t.commit && t.cat !== L.IGNORE && t.amount > 0);
+  const inWeek = ps.txs.filter(t => t.day >= prev.start && t.day <= prev.end && !t.isFixed && !t.commit && t.cat !== L.IGNORE && t.amount > 0);
   const top = [...inWeek].sort((a, b) => b.amount - a.amount).slice(0, 3);
   const byCat = {};
   for (const t of inWeek) byCat[t.cat] = (byCat[t.cat] || 0) + t.amount;
@@ -1386,7 +1387,7 @@ function pickFile() {
     if (f.size > 15e6) return toast('Arquivo grande demais para uma fatura.');
     let text;
     try {
-      if (/\.xlsx$/i.test(f.name)) { const X = await import('./xlsx.js?v=20261117h'); text = await X.xlsxToCSV(await f.arrayBuffer()); }
+      if (/\.xlsx$/i.test(f.name)) { const X = await import('./xlsx.js?v=20261117i'); text = await X.xlsxToCSV(await f.arrayBuffer()); }
       else if (/\.xls$/i.test(f.name)) return toast('Arquivo .xls antigo: abra no Excel e salve como .xlsx ou CSV.');
       else text = await f.text();
     } catch (err) { return toast('Não consegui ler o arquivo: ' + (err.message || err)); }

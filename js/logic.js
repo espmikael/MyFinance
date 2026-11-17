@@ -532,6 +532,19 @@ export function matchFixed(fixed, txs, ym) {
 
 const txKey = t => t.id ?? t.uid;
 
+// Em qual ciclo do app uma compra entra. Cartão principal: pela data. Outro cartão com fechamento
+// informado: pela fatura dele — a compra entra no ciclo em que a fatura daquele cartão fecha
+// (ex.: Inter de 31/10, na fatura que fecha em novembro, conta no ciclo de novembro do Nubank).
+export function billingDate(t, settings) {
+  const src = t.source || 'nubank';
+  const prim = primaryCard(settings);
+  if (src === prim.id) return t.date;
+  const c = (settings.cards || []).find(x => x.id === src);
+  if (!c || !c.closing) return t.date;
+  return cycleFor(t.date, c.closing).end;
+}
+export const inCycleOf = (t, cycle, settings) => { const b = billingDate(t, settings); return b >= cycle.start && b <= cycle.end; };
+
 export function summarize({ txs, rules, settings, cycle, today, incomes = [], avg = null }) {
   const cats = settings.categories || [];
   const totalDays = daysBetween(cycle.start, cycle.end) + 1;
@@ -553,7 +566,9 @@ export function summarize({ txs, rules, settings, cycle, today, incomes = [], av
     for (const f of matchFixed(billsOut(settings, m, txs, rules), monthTx(m), m)) if (f.tx) fixedTx.add(txKey(f.tx));
 
   const commits = cardCommitments({ txs, rules, settings, cycle, today });
-  const inCycle = txs.filter(t => t.date >= cycle.start && t.date <= cycle.end).map(withCat)
+  // day: o dia em que a compra pesa no ciclo (a data real, ou o 1º dia do ciclo se veio de antes por outro cartão)
+  const inCycle = txs.filter(t => inCycleOf(t, cycle, settings)).map(withCat)
+    .map(t => ({ ...t, day: t.date < cycle.start ? cycle.start : t.date > cycle.end ? cycle.end : t.date }))
     .map(t => (fixedTx.has(txKey(t)) ? { ...t, isFixed: true } : commits.kinds.has(txKey(t)) ? { ...t, commit: commits.kinds.get(txKey(t)) } : t));
   const counted = inCycle.filter(t => t.cat !== IGNORE && !t.isFixed);
 
@@ -624,7 +639,7 @@ export function summarize({ txs, rules, settings, cycle, today, incomes = [], av
   let acc = 0, accF = 0;
   for (let i = 0; i < totalDays; i++) {
     const d = addDays(cycle.start, i);
-    for (const t of counted) if (t.date === d) { acc += Number(t.amount); if (!t.commit) accF += Number(t.amount); }
+    for (const t of counted) if (t.day === d) { acc += Number(t.amount); if (!t.commit) accF += Number(t.amount); }
     cumulative.push({ date: d, value: round(acc), future: d > today });
     cumFree.push({ date: d, value: round(accF), future: d > today });
   }
@@ -671,7 +686,7 @@ const parcOf = t => { const m = String(t.title || '').match(PARC_RE); return m ?
 function recurringIn(txs, rules, settings, cycle) {
   const closing = primaryCard(settings).closing || 1;
   const cards = new Set(settings.cards.map(c => c.id));
-  const cardTx = c => txs.filter(t => t.date >= c.start && t.date <= c.end && Number(t.amount) > 0 && cards.has(t.source || 'nubank') && categoryOf(t, rules) !== IGNORE);
+  const cardTx = c => txs.filter(t => inCycleOf(t, c, settings) && Number(t.amount) > 0 && cards.has(t.source || 'nubank') && categoryOf(t, rules) !== IGNORE);
   const keyOf = t => merchantOf(t, rules).key;
   const byKey = list => { const m = {}; for (const t of list) if (!parcOf(t)) (m[keyOf(t)] ||= []).push(t); return m; };
   const cur = cardTx(cycle);
