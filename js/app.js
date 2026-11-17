@@ -1,5 +1,5 @@
-import * as L from './logic.js?v=20261117n';
-import { SUPABASE_URL, SUPABASE_ANON_KEY } from './config.js?v=20261117n';
+import * as L from './logic.js?v=20261117o';
+import { SUPABASE_URL, SUPABASE_ANON_KEY } from './config.js?v=20261117o';
 
 const $app = document.getElementById('app');
 const $toast = document.getElementById('toast');
@@ -427,7 +427,7 @@ function weekReview(s) {
   return `<section class="card review" aria-labelledby="wr-h">
     <div class="card-head"><h2 id="wr-h">Fechamento da semana ${L.ddmm(prev.start)}–${L.ddmm(prev.end)}</h2><button class="icon-btn sm" data-act="week-dismiss" data-w="${prev.start}" aria-label="Dispensar fechamento">${icon('x', 16)}</button></div>
     <div class="rv-top"><span><small>Gastou</small><b>${money(prev.spent)}</b></span><span><small>Liberado</small><b>${money(prev.limit)}</b></span><span><small>${diff > 0 ? 'Passou' : 'Sobrou'}</small><b class="${diff > 0 ? 'neg' : 'pos'}">${money(Math.abs(diff))}</b></span></div>
-    <p class="small" style="margin:10px 0 6px;color:var(--text-2)">${diff > 0 ? `Os ${money(diff)} a mais saíram das semanas que faltam.` : diff < -0.5 ? `Os ${money(-diff)} que sobraram foram para as semanas que faltam.` : 'Fechou exatamente no liberado.'} ${w.containment ? `Modo contenção: esta semana libera <b>${money(w.limit)}</b>, só para o essencial.` : `Esta semana libera <b>${money(w.limit)}</b>.`}${topCat ? ` Onde mais foi: <b>${esc(topCat[0])}</b> (${money(topCat[1])}).` : ''}</p>
+ <p class="small" style="margin:10px 0 6px;color:var(--text-2)">${w.containment ? '' : diff > 0 ? `Os ${money(diff)} a mais saíram das semanas que faltam. ` : diff < -0.5 ? `Os ${money(-diff)} que sobraram foram para as semanas que faltam. ` : 'Fechou exatamente no liberado. '}${w.containment ? `Até ${L.ddmm(s.cycle.end)}, só o essencial: cerca de <b>${money(w.limit)}</b> por semana.` : `Esta semana libera <b>${money(w.limit)}</b>.`}${topCat ? ` Onde mais foi: <b>${esc(topCat[0])}</b> (${money(topCat[1])}).` : ''}</p>
     ${top.length ? `<div class="rv-list">${top.map(t => `<div><span>${esc(L.prettyTitle(t.title))}<small>${L.weekdayShort(t.date)} ${L.ddmm(t.date)} · ${esc(t.cat)}</small></span><b>${money(t.amount)}</b></div>`).join('')}</div>` : ''}
   </section>`;
 }
@@ -440,16 +440,34 @@ function weekHero(s) {
   }
   const over = w.left < 0;
   const up = lastUploadDay();
+  // modo contenção: o mês já foi; até o fechamento, separa o essencial (cabe na média) do resto (meta: zero)
+  if (w.containment) {
+    const cz = s.containment, ess = new Set(cz.cats);
+    const wk = s.txs.filter(t => t.day >= w.start && t.day <= w.end && !t.isFixed && !t.commit && t.cat !== L.IGNORE && t.amount > 0);
+    const essSpent = wk.filter(t => ess.has(t.cat)).reduce((a, t) => a + t.amount, 0);
+    const other = wk.filter(t => !ess.has(t.cat)).reduce((a, t) => a + t.amount, 0);
+    const essLeft = w.limit - essSpent;
+    const names = cz.cats.length ? cz.cats.join(' e ').toLowerCase() : 'o essencial';
+    return `<div class="kcard hero week contain">
+      <span class="r1"><span class="kl">Até ${L.ddmm(s.cycle.end)}: só o essencial</span><span class="kl" style="opacity:.9">${L.ddmm(w.start)}–${L.ddmm(w.end)}</span></span>
+      <span class="kv">${money(Math.max(0, essLeft))}</span>
+      <span class="ks">para ${esc(names)} nesta semana · gastou ${money(essSpent)} de ~${money(w.limit)}${cz.fromAvg ? ' (sua média)' : ''}</span>
+      <div class="wprog" aria-hidden="true"><i style="width:${w.limit > 0 ? Math.min(100, Math.round(essSpent / w.limit * 100)) : 100}%"></i></div>
+      <div class="wfoot">
+        <span><span>Fora do essencial nesta semana <small>(meta: R$ 0)</small></span><b class="${other > 0 ? 'neg-on' : ''}">${money(other)}</b></span>
+        <span><span>Faturas enviadas até</span><b>${up ? `${L.weekdayShort(up)} ${L.ddmm(up)}` : '—'}</b></span>
+      </div>
+    </div>`;
+  }
   // uma pergunta só: quanto ainda posso gastar nesta semana
-  const cz = w.containment ? s.containment : null;
+  const cz = null;
   const pct = w.limit > 0 ? Math.min(100, Math.round(w.spent / w.limit * 100)) : 100;
   const range = `${L.weekdayShort(w.start)} ${L.ddmm(w.start)} a ${L.weekdayShort(w.end)} ${L.ddmm(w.end)}`;
-  return `<div class="kcard hero week ${over ? 'zero' : cz ? 'contain' : ''}">
+  return `<div class="kcard hero week ${over ? 'zero' : ''}">
       <span class="r1"><span class="kl">Pode gastar nesta semana</span><span class="kl" style="opacity:.9">${range}</span></span>
       <span class="kv">${money(Math.max(0, w.left))}</span>
       <div class="wprog" aria-hidden="true"><i style="width:${pct}%"></i></div>
       <span class="ks">gastou ${money(w.spent)} de ${money(w.limit)}${over ? ` · <b>passou ${money(-w.left)}</b>, que sai da próxima semana` : !over && w.daysLeft > 1 ? ` · ${money(w.perDay)} por dia até ${L.weekdayShort(w.end) === 'dom' ? 'domingo' : L.ddmm(w.end)}` : ''}</span>
-      ${cz ? `<span class="ctag">Modo contenção: o limite do mês acabou (passou ${money(s.freeSpent - s.freeBudget)}). A meta da semana cobre só ${esc(cz.cats.join(' e ') || 'o essencial')}.</span>` : ''}
       <div class="wfoot">
         <span><span>Faturas enviadas até</span><b>${up ? `${L.weekdayShort(up)} ${L.ddmm(up)}` : '—'}</b></span>
       </div>
@@ -1516,7 +1534,7 @@ function pickFile() {
     if (f.size > 15e6) return toast('Arquivo grande demais para uma fatura.');
     let text;
     try {
-      if (/\.xlsx$/i.test(f.name)) { const X = await import('./xlsx.js?v=20261117n'); text = await X.xlsxToCSV(await f.arrayBuffer()); }
+      if (/\.xlsx$/i.test(f.name)) { const X = await import('./xlsx.js?v=20261117o'); text = await X.xlsxToCSV(await f.arrayBuffer()); }
       else if (/\.xls$/i.test(f.name)) return toast('Arquivo .xls antigo: abra no Excel e salve como .xlsx ou CSV.');
       else text = await f.text();
     } catch (err) { return toast('Não consegui ler o arquivo: ' + (err.message || err)); }
