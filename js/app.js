@@ -1,5 +1,5 @@
-import * as L from './logic.js?v=20261117d';
-import { SUPABASE_URL, SUPABASE_ANON_KEY } from './config.js?v=20261117d';
+import * as L from './logic.js?v=20261117e';
+import { SUPABASE_URL, SUPABASE_ANON_KEY } from './config.js?v=20261117e';
 
 const $app = document.getElementById('app');
 const $toast = document.getElementById('toast');
@@ -264,8 +264,18 @@ function render() {
   wireCharts();
 }
 
+// média por rubrica dos últimos ciclos fechados (guardada até mudar gastos, regras ou ajustes)
+let avgMemo = { k: null, v: null };
+function averages() {
+  const k = [state.txs, state.rules, state.settings, state.incomes, today()];
+  if (avgMemo.k && avgMemo.k.every((x, i) => x === k[i])) return avgMemo.v;
+  const v = L.averageByCategory({ txs: state.txs, rules: state.rules, settings: state.settings, incomes: state.incomes, today: today() });
+  avgMemo = { k, v };
+  return v;
+}
 function summary(cycle) {
-  return L.summarize({ txs: state.txs, rules: state.rules, settings: state.settings, cycle, today: today(), incomes: state.incomes });
+  const a = averages();
+  return L.summarize({ txs: state.txs, rules: state.rules, settings: state.settings, cycle, today: today(), incomes: state.incomes, avg: a.cycles.length ? a.avg : null });
 }
 
 // botões do topo de cada tela
@@ -329,7 +339,7 @@ function homeNumbers(s) {
       <span class="kl">Hoje dá para gastar</span>
       <span class="kv">${money(s.perDay || 0)}</span>
       <div class="segbar" aria-hidden="true">${segs(s.totalDays, s.totalDays - s.daysLeft)}</div>
-      <span class="ks">${s.perDay > 0 ? `${money(s.perDay * 7)} por semana · ${s.daysLeft} ${s.daysLeft === 1 ? 'dia' : 'dias'} até ${L.dayMonth(s.cycle.end)}` : `Os tetos variáveis acabaram. Até ${L.dayMonth(s.cycle.end)}, só o essencial.`}</span>
+      <span class="ks">${s.limitMode === 'none' ? 'Informe suas entradas ou defina um limite em Ajustes.' : s.perDay > 0 ? `${money(s.perDay * 7)} por semana · ${s.daysLeft} ${s.daysLeft === 1 ? 'dia' : 'dias'} até ${L.dayMonth(s.cycle.end)}` : `O limite do variável acabou. Até ${L.dayMonth(s.cycle.end)}, só o essencial.`}</span>
     </div>` : '';
   const k = (label, value, bar, foot, cls = '') => `<div class="kcard"><span class="kl">${label}</span><span class="kv ${cls}">${value}</span>${bar}<span class="ks">${foot}</span></div>`;
   const incBar = `<div class="segbar" aria-hidden="true">${inc.length ? segs(inc.length, rec, 'okf') : ''}</div>`;
@@ -353,29 +363,25 @@ function homeNumbers(s) {
     </div>`;
 }
 
-// Posso comprar?
+// Posso comprar? — contra o limite único do variável
 function possoCard(s) {
-  if (!s.isCurrent) return '';
-  const cats = s.rows.filter(r => !r.fixed && r.varBudget > 0);
-  if (!cats.length) return '';
+  if (!s.isCurrent || !(s.varBudget > 0)) return '';
   const pc = state.pc;
-  if (!pc.cat || !cats.some(r => r.name === pc.cat)) pc.cat = (cats.find(r => r.status !== 'ok') || cats[0]).name;
-  const row = cats.find(r => r.name === pc.cat);
   const amt = Number(pc.amt) || 0;
-  const left = Math.max(0, row.left);
+  const left = s.varLeft;
   const fits = amt <= left;
-  const newDay = Math.max(0, (s.varLeft - Math.min(amt, left)) / Math.max(1, s.daysLeft));
+  const newDay = Math.max(0, (left - Math.min(amt, left)) / Math.max(1, s.daysLeft));
   const sobraAfter = s.leftover - Math.max(0, amt - left);
-  const v = fits
-    ? { cls: 'ok', ic: icon('check', 18, 2.6), t: 'Cabe', x: `Sobram ${money(left - amt)} no teto de ${esc(row.name)}. O “hoje dá para gastar” vai de ${money(s.perDay || 0)} para ${money(newDay)}.` }
-    : { cls: 'no', ic: '!', t: 'Não cabe no teto', x: `Passa ${money(amt - left)} do teto de ${esc(row.name)}.${s.income > 0 ? ` Se comprar, a sobra prevista de ${mName(s.month)} vai de ${signed(s.leftover)} para ${signed(sobraAfter)}.` : ''}` };
+  const v = !amt
+    ? { cls: 'ok', ic: icon('check', 18, 2.6), t: `Cabem ${money(left)}`, x: `É o que resta do limite do variável até ${L.dayMonth(s.cycle.end)}. Escolha um valor para testar.` }
+    : fits
+    ? { cls: 'ok', ic: icon('check', 18, 2.6), t: 'Cabe', x: `Sobram ${money(left - amt)} no limite do mês. O “hoje dá para gastar” vai de ${money(s.perDay || 0)} para ${money(newDay)}.` }
+    : { cls: 'no', ic: '!', t: 'Não cabe no limite', x: `Passa ${money(amt - left)} do que resta para o variável.${s.income > 0 ? ` Se comprar, a sobra prevista de ${mName(s.month)} vai de ${signed(s.leftover)} para ${signed(sobraAfter)}.` : ''}` };
   return `<section class="card" id="pc" aria-labelledby="pc-h">
     <div class="card-head"><h2 id="pc-h">Posso comprar?</h2><span class="sub">teste antes de passar o cartão</span></div>
     <div class="lbl">Valor</div>
     <div class="amt-row">${[20, 50, 100, 250].map(x => `<button class="chip" data-act="pc-amt" data-v="${x}" aria-pressed="${amt === x}">R$ ${x}</button>`).join('')}
-      <label class="money"><span>R$</span><input id="pc-in" inputmode="decimal" placeholder="outro" aria-label="Outro valor" value="${[20, 50, 100, 250].includes(amt) ? '' : fmtIn(amt)}"></label></div>
-    <div class="lbl" style="margin-top:12px">Rubrica</div>
-    <div class="chips" style="margin-top:8px">${cats.map(r => `<button class="chip" data-act="pc-cat" data-v="${esc(r.name)}" aria-pressed="${r.name === pc.cat}">${esc(r.name)}</button>`).join('')}</div>
+      <label class="money"><span>R$</span><input id="pc-in" inputmode="decimal" placeholder="outro" aria-label="Outro valor" value="${[20, 50, 100, 250].includes(amt) || !amt ? '' : fmtIn(amt)}"></label></div>
     <div class="verdict ${v.cls}" aria-live="polite"><span class="ic">${v.ic}</span><div><b>${v.t}</b><span>${v.x}</span></div></div>
   </section>`;
 }
@@ -462,30 +468,39 @@ function homeBills(s) {
   </section>`;
 }
 
-// Rubricas: primeiro o que pede atenção
+// Rubricas: comparadas com a sua média (ou com o teto, se você definiu um)
 function rubricasCard(s) {
-  const vr = s.rows.filter(r => !r.fixed && r.varBudget > 0);
-  const att = vr.filter(r => r.status !== 'ok');
-  const calm = vr.filter(r => r.status === 'ok');
+  const vr = s.rows.filter(r => !r.fixed && (r.varSpent > 0 || r.varBudget > 0));
+  const att = vr.filter(r => r.status !== 'ok').sort((a, b) => b.varSpent - a.varSpent);
+  const calm = vr.filter(r => r.status === 'ok').sort((a, b) => b.varSpent - a.varSpent);
+  const hasAvg = s.rows.some(r => r.avg > 0);
   const N = 30;
   const attHTML = att.map(r => {
-    const over = r.status === 'over';
+    const over = r.status === 'over', above = r.status === 'above';
+    const tag = over ? 'teto estourado' : above ? `+${Math.round(r.vsAvg * 100)}% da média` : 'acima do ritmo';
     const txt = over ? `${money(r.varSpent)} de ${money(r.varBudget)}. Os ${money(-r.left)} a mais saem da sobra do mês.`
+      : above ? (s.isCurrent ? `${money(r.varSpent)} até agora. Neste ponto do ciclo você costuma estar em ${money(r.expected)} (média de ${money(r.avg)} por ciclo).` : `${money(r.varSpent)} no ciclo. Sua média é ${money(r.avg)}.`)
       : `${money(r.varSpent)} de ${money(r.varBudget)} com ${pct(s.elapsed)} do ciclo. Restam ${money(r.left)}${r.perWeek != null ? `, cerca de ${money(r.perWeek)} por semana` : ''}.`;
+    const base = r.varBudget > 0 ? r.varBudget : r.avg;
     return `<button class="attc ${over ? 'o' : 'w'}" data-act="cat-open" data-c="${esc(r.name)}">
-      <span class="h"><b>${esc(r.name)}</b><span class="tag">${over ? 'teto estourado' : 'acima do ritmo'}</span></span>
-      <span class="segbar thin" aria-hidden="true">${segs(N, Math.min(N, Math.round(r.varSpent / r.varBudget * N)), over ? 'of' : 'wf')}</span>
+      <span class="h"><b>${esc(r.name)}</b><span class="tag">${tag}</span></span>
+      <span class="segbar thin" aria-hidden="true">${segs(N, Math.min(N, Math.round(r.varSpent / Math.max(1, base) * N)), over ? 'of' : 'wf')}</span>
       <p>${txt}</p></button>`;
   }).join('');
-  const calmHTML = calm.map(r => `<button class="calmc" data-act="cat-open" data-c="${esc(r.name)}">
-      <small>${esc(r.name)}</small><b>${money(r.left)}</b>
-      <span class="thinbar" aria-hidden="true"><i style="width:${Math.min(100, Math.round(r.varSpent / r.varBudget * 100))}%"></i></span>
-      <em>${r.perWeek != null ? `${money(r.perWeek)} por semana` : `restam de ${money(r.varBudget)}`}</em></button>`).join('');
+  const calmHTML = calm.map(r => {
+    const base = r.varBudget > 0 ? r.varBudget : r.avg;
+    const foot = r.varBudget > 0 ? `teto ${money(r.varBudget)}` : r.avg > 0 ? `média ${money(r.avg)}` : 'sem média ainda';
+    return `<button class="calmc" data-act="cat-open" data-c="${esc(r.name)}">
+      <small>${esc(r.name)}</small><b>${money(r.varSpent)}</b>
+      <span class="thinbar" aria-hidden="true"><i style="width:${base > 0 ? Math.min(100, Math.round(r.varSpent / base * 100)) : 0}%"></i></span>
+      <em>${foot}</em></button>`;
+  }).join('');
+  const sub = !vr.length ? 'nada gasto ainda' : att.length ? `${att.length} ${att.length === 1 ? 'foge' : 'fogem'} do seu padrão` : hasAvg ? 'tudo dentro do seu padrão' : 'toque para ver os gastos';
   return `<section class="card" aria-labelledby="rb-h">
-    <div class="card-head"><h2 id="rb-h">Rubricas</h2><span class="sub">${att.length ? `${att.length} ${att.length === 1 ? 'pede' : 'pedem'} atenção` : 'tudo no ritmo'} · toque para ver os gastos</span></div>
+    <div class="card-head"><h2 id="rb-h">Rubricas</h2><span class="sub">${sub}</span></div>
     ${att.length ? `<div class="att">${attHTML}</div>` : ''}
     ${calm.length ? `<div class="calm">${calmHTML}</div>` : ''}
-    ${!vr.length ? '<p class="help">Defina tetos para as rubricas em Ajustes.</p>' : ''}
+    ${!hasAvg && vr.length ? '<p class="help">Quando houver um ciclo fechado com compras, cada rubrica passa a ser comparada com a sua média, e as que fugirem do padrão aparecem aqui primeiro.</p>' : ''}
   </section>`;
 }
 
@@ -552,8 +567,10 @@ function viewContas() {
   const parts = [['Exatas fora do cartão', plan.exactOut, 'var(--brand)'], ['Estimadas fora do cartão', plan.estOut, 'var(--fixed-fill)'], ['Já no cartão', plan.onCard, 'var(--over-fill)']];
   if (plan.free > 0) parts.push(['Livre', plan.free, 'var(--ok-soft)']);
   const slackAlert = plan.income <= 0 ? `<div class="alert warn">${icon('warn', 20)}<span>Sem entradas previstas para ${mName(ym)}. Informe salário e vintena para ver o que fica livre.</span></div>`
-    : plan.slack >= 0 ? `<div class="alert good">${icon('check', 20, 2.4)}<span><b>Os tetos cabem${plan.slack < 150 ? ', por pouco' : ''}.</b> Tirando o que já está no cartão dentro deles, os tetos variáveis pedem ${money(plan.tetoNeed)}. Ficam livres ${money(plan.free)}: folga de ${money(plan.slack)}.</span></div>`
-    : `<div class="alert bad">${icon('warn', 20)}<span><b>Os tetos não cabem.</b> Eles pedem ${money(plan.tetoNeed)} e ficam livres ${money(plan.free)}. Se gastar tudo o que os tetos permitem, ${mName(ym)} fecha ${money(-plan.slack)} no negativo. Reduza algum teto.</span></div>`;
+    : plan.forVar < 0 ? `<div class="alert bad">${icon('warn', 20)}<span><b>As contas${plan.aporte > 0 ? ' e o aporte' : ''} já passam das entradas.</b> Faltam ${money(-plan.forVar)} em ${mName(ym)} antes de qualquer gasto variável.</span></div>`
+    : plan.manual == null ? `<div class="alert good">${icon('check', 20, 2.4)}<span><b>Livre para o variável: ${money(plan.forVar)}.</b> Entradas menos contas${plan.onCard > 0 ? ', parcelas no cartão' : ''}${plan.aporte > 0 ? ` e o aporte de ${money(plan.aporte)}` : ''}. É o que dá para gastar variando sem mexer no aporte.</span></div>`
+    : plan.slack >= 0 ? `<div class="alert good">${icon('check', 20, 2.4)}<span><b>Seu limite de ${money(plan.manual)} cabe${plan.slack < 150 ? ', por pouco' : ''}.</b> Ficam livres ${money(plan.forVar)} para o variável${plan.aporte > 0 ? ', já guardando o aporte' : ''}: folga de ${money(plan.slack)}.</span></div>`
+    : `<div class="alert bad">${icon('warn', 20)}<span><b>Seu limite de ${money(plan.manual)} não cabe.</b> Ficam livres ${money(plan.forVar)}${plan.aporte > 0 ? ' depois do aporte' : ''}. Se gastar o limite todo, ${mName(ym)} fecha ${money(-plan.slack)} abaixo do planejado.</span></div>`;
 
   const kind = state.contasKind;
   const list = (kind === 'exact' ? plan.exact : plan.est);
@@ -676,13 +693,13 @@ function lineChart(s, W, H, mobile) {
   const grid = [0, max / 4, max / 2, (3 * max) / 4, max].map(v => `<line class="grid" x1="0" x2="${W}" y1="${Y(v)}" y2="${Y(v)}"></line>`).join('');
   const oi = s.overDay ? s.cumulative.indexOf(s.overDay) : -1;
   const over = oi >= 0 ? `<circle class="pt" cx="${X(oi)}" cy="${Y(s.overDay.value)}" r="5"></circle>
-    <text class="note" x="${X(oi) + 8}" y="${Y(s.overDay.value) + 18}" font-size="${fs}">passou dos tetos em ${L.ddmm(s.overDay.date)}</text>` : '';
+    <text class="note" x="${X(oi) + 8}" y="${Y(s.overDay.value) + 18}" font-size="${fs}">passou do limite em ${L.ddmm(s.overDay.date)}</text>` : '';
   const li = pts.length - 1;
   const end = li >= 0 ? `<circle class="pt" cx="${X(li)}" cy="${Y(last)}" r="5"></circle>
     <text class="note" x="${X(li) - 8}" y="${Y(last) - 10}" text-anchor="end" font-size="${fs}">${money(last)}</text>` : '';
   const mid = Math.floor((n - 1) / 2);
   const data = esc(JSON.stringify({ W, H, n, max, vals: pts.map(p => p.value), dates: pts.map(p => p.date) }));
-  return `<svg viewBox="${vb}" data-chart="${data}" role="img" aria-label="Gasto acumulado no ciclo: ${money(last)}${s.overDay ? `, passou da soma dos tetos em ${L.ddmm(s.overDay.date)}` : ''}">
+  return `<svg viewBox="${vb}" data-chart="${data}" role="img" aria-label="Gasto acumulado no ciclo: ${money(last)}${s.overDay ? `, passou do limite em ${L.ddmm(s.overDay.date)}` : ''}">
     ${grid}${ylabels}
     ${s.varBudget > 0 ? `<line class="ref" x1="0" x2="${W}" y1="${by}" y2="${by}"></line>` : ''}
     <polyline class="ln" points="${poly}"></polyline>
@@ -764,17 +781,22 @@ function viewPainel(s) {
   const diff = prevTotal > 0 ? (s.varSpent - prevTotal) / prevTotal : null;
   const kpis = [
     ['Gasto no ciclo', money(s.varSpent), 'sem os fixos'],
-    [s.overBudget > 0 ? 'Acima dos tetos' : 'Abaixo dos tetos', money(Math.abs(s.overBudget)), '', s.overBudget > 0 ? 'neg' : ''],
+    s.varBudget > 0 ? [s.overBudget > 0 ? 'Acima do limite' : 'Abaixo do limite', money(Math.abs(s.overBudget)), `limite ${money(s.varBudget)}`, s.overBudget > 0 ? 'neg' : ''] : ['Limite do variável', '—', 'informe as entradas'],
     s.isCurrent ? ['Projeção até fechar', money(s.varProjected), `hoje cabe ${money(s.perDay || 0)} por dia`] : ['Média por dia', money(s.varSpent / s.totalDays), `${s.totalDays} dias de ciclo`],
     ['Ciclo anterior', prevTotal > 0 ? money(prevTotal) : '—', diff != null && s.varSpent > 0 ? `este ciclo: ${diff >= 0 ? '+' : '−'}${pct(Math.abs(diff))}` : prevTotal > 0 ? 'fatura passada' : 'sem dados'],
   ];
 
-  const maxBar = Math.max(1, ...s.rows.map(r => Math.max(r.spent, r.budget))) * 1.05;
-  const bars = s.rows.filter(r => r.spent > 0 || r.budget > 0).sort((a, b) => b.spent - a.spent).map(r => `
-    <div class="hbar" title="${esc(r.name)}: ${money(r.spent)} de ${money(r.budget)}">
-      <div class="lab"><span>${esc(r.name)}</span><span><b>${money(r.spent)}</b> <span class="muted">de ${money(r.budget)}</span></span></div>
-      <div class="trk"><div class="val ${r.spent > r.budget ? 'over' : ''}" style="width:${(r.spent / maxBar * 100).toFixed(1)}%"></div>${r.budget > 0 ? `<div class="tick" style="left:${(r.budget / maxBar * 100).toFixed(1)}%"></div>` : ''}</div>
-    </div>`).join('');
+  // referência de cada rubrica: o teto (se houver) ou a média do ciclo inteiro, mais as contas dela
+  const refOf = r => r.varBudget > 0 ? r.budget : r.avg > 0 ? Math.round((r.avg + r.linked) * 100) / 100 : r.linked;
+  const refLbl = r => r.varBudget > 0 ? `teto ${money(r.budget)}` : r.avg > 0 ? `média ${money(refOf(r))}` : r.linked > 0 ? `contas ${money(r.linked)}` : '';
+  const maxBar = Math.max(1, ...s.rows.map(r => Math.max(r.spent, refOf(r)))) * 1.05;
+  const bars = s.rows.filter(r => r.spent > 0 || refOf(r) > 0).sort((a, b) => b.spent - a.spent).map(r => {
+    const ref = refOf(r), over = r.varBudget > 0 ? r.spent > r.budget : r.status === 'above';
+    return `<div class="hbar" title="${esc(r.name)}: ${money(r.spent)}${refLbl(r) ? ' · ' + refLbl(r) : ''}">
+      <div class="lab"><span>${esc(r.name)}</span><span><b>${money(r.spent)}</b> <span class="muted">${refLbl(r)}</span></span></div>
+      <div class="trk"><div class="val ${over ? 'over' : ''}" style="width:${(r.spent / maxBar * 100).toFixed(1)}%"></div>${ref > 0 ? `<div class="tick" style="left:${(ref / maxBar * 100).toFixed(1)}%"></div>` : ''}</div>
+    </div>`;
+  }).join('');
 
   const totalSrc = Object.values(s.bySource).reduce((a, b) => a + Math.max(0, b), 0) || 1;
   const allSrc = sources().filter(x => x.card || s.bySource[x.id]);
@@ -794,7 +816,7 @@ function viewPainel(s) {
     <div class="dash" style="margin-top:16px">
       <section class="card">
         <div class="card-head"><h2>Ritmo do ciclo</h2></div>
-        <div class="legend"><span><span class="sw-line"></span>Gasto acumulado (sem fixos)</span>${s.varBudget > 0 ? `<span><span class="sw-dash"></span>Soma dos tetos · ${money(s.varBudget)}</span>` : ''}</div>
+        <div class="legend"><span><span class="sw-line"></span>Gasto acumulado (sem fixos)</span>${s.varBudget > 0 ? `<span><span class="sw-dash"></span>Limite do variável · ${money(s.varBudget)}</span>` : ''}</div>
         <div class="chart only-mob">${lineChart(s, 340, 150, true)}<div class="tip"></div></div>
         <div class="chart only-desk">${lineChart(s, 720, 220, false)}<div class="tip"></div></div>
       </section>
@@ -807,7 +829,7 @@ function viewPainel(s) {
       </section>
       <section class="card full">
         <div class="card-head"><h2>Por rubrica</h2></div>
-        <div class="legend"><span><span class="sw-bar"></span>Gasto</span><span><span class="sw-tick"></span>Teto + fixos</span></div>
+        <div class="legend"><span><span class="sw-bar"></span>Gasto</span><span><span class="sw-tick"></span>Sua média (ou teto) + contas</span></div>
         <div class="bars">${bars}</div>
       </section>
     </div>`}`;
@@ -841,8 +863,10 @@ function wireCharts() {
 function monthlyCost() {
   const st = state.settings;
   const fixed = (st.fixed || []).reduce((s, f) => s + (Number(f.value) || 0), 0);
-  const budget = st.categories.reduce((s, c) => s + (Number(c.budget) || 0), 0);
-  return fixed + budget;
+  // variável: a soma das médias por rubrica; sem histórico ainda, o limite do mês
+  const a = averages();
+  const variable = a.cycles.length ? Object.values(a.avg).reduce((s, v) => s + v, 0) : summary(curCycle()).varBudget;
+  return fixed + variable;
 }
 
 function viewReservas() {
@@ -887,7 +911,7 @@ function viewReservas() {
     ${aporteGoal > 0 ? `<section class="card soft">
       <div class="r1"><b>Aporte deste mês</b><span class="small" style="color:var(--brand-text)">${money(aporteMes)} de ${money(aporteGoal)}</span></div>
       <div class="meter"><span class="brand" style="width:${Math.min(100, aporteMes / aporteGoal * 100).toFixed(1)}%"></span></div>
-      ${negWarn ? `<div class="small muted">A ${L.invoiceName(lastClosed.cycle, card(), today()).toLowerCase()} fechou no negativo. O aporte só cabe se este ciclo ficar dentro dos tetos.</div>` : ''}
+      ${negWarn ? `<div class="small muted">A ${L.invoiceName(lastClosed.cycle, card(), today()).toLowerCase()} fechou no negativo. O aporte só cabe se este ciclo ficar dentro do limite.</div>` : ''}
     </section>` : ''}
 
     <section class="card"><div class="card-head"><h2>Caixinhas</h2></div>
@@ -915,7 +939,7 @@ function viewAjustes() {
       <button class="icon-btn sm" data-act="del" data-path="cards" data-i="${i}" aria-label="Remover cartão" ${c.primary ? 'disabled' : ''}>×</button></div>`).join('');
   const cats = d.categories.map((c, i) => `<div class="edit-row cat">
       <input class="input" data-bind="categories.${i}.name" value="${esc(c.name)}" aria-label="Rubrica">
-      <input class="input" data-bind="categories.${i}.budget" data-type="money" inputmode="decimal" value="${fmtIn(c.budget)}" aria-label="Teto">
+      <input class="input" data-bind="categories.${i}.budget" data-type="money" inputmode="decimal" value="${c.budget > 0 ? fmtIn(c.budget) : ''}" placeholder="sem teto" aria-label="Teto (opcional)">
       <label class="check"><input type="checkbox" data-bind="categories.${i}.fixed" data-type="bool" ${c.fixed ? 'checked' : ''}> fixa</label>
       <button class="icon-btn sm" data-act="del" data-path="categories" data-i="${i}" aria-label="Remover rubrica">×</button></div>`).join('');
   const options = sel => [...catNames(), L.IGNORE].map(n => `<option ${n === sel ? 'selected' : ''}>${esc(n)}</option>`).join('');
@@ -939,9 +963,11 @@ function viewAjustes() {
       <button class="row add" data-act="add" data-path="cards">Adicionar cartão</button>
     </section>
     <section class="card">
-      <div class="card-head"><h2>Rubricas e tetos</h2></div>
-      <p class="help">O teto é o que dá para gastar variando (cartão, Pix, à mão). As contas de cada rubrica somam por cima. Marque "fixa" na rubrica que não varia no mês.</p>
-      <button class="btn soft small" data-act="suggest">Sugerir tetos pela média dos últimos ciclos</button>
+      <div class="card-head"><h2>Limite do mês</h2></div>
+      <p class="help">Um número só para tudo o que varia (cartão, Pix, à mão). Em branco, o app calcula: entradas − contas − meta de aporte${(() => { const x = summary(curCycle()); return x.limitMode === 'auto' ? `, que neste ciclo dá <b>${money(x.autoLimit)}</b>` : ''; })()}. Preencha só se quiser um limite mais apertado.</p>
+      <div class="field"><label for="vl">Limite do variável por mês</label><input class="input" id="vl" data-bind="varLimit" data-type="money" inputmode="decimal" value="${d.varLimit > 0 ? fmtIn(d.varLimit) : ''}" placeholder="automático"></div>
+      <div class="card-head" style="margin-top:18px"><h2>Rubricas</h2></div>
+      <p class="help">As rubricas servem para ver onde o dinheiro foi. O app compara cada uma com a sua média dos últimos ciclos e avisa quando alguma foge do padrão. Teto é opcional: use só na rubrica que você quer segurar (ex.: delivery). Marque "fixa" na rubrica que não varia no mês.</p>
       ${cats}
       <button class="row add" data-act="add" data-path="categories">Adicionar rubrica</button>
     </section>
@@ -1299,7 +1325,7 @@ function pickFile() {
     if (f.size > 15e6) return toast('Arquivo grande demais para uma fatura.');
     let text;
     try {
-      if (/\.xlsx$/i.test(f.name)) { const X = await import('./xlsx.js?v=20261117d'); text = await X.xlsxToCSV(await f.arrayBuffer()); }
+      if (/\.xlsx$/i.test(f.name)) { const X = await import('./xlsx.js?v=20261117e'); text = await X.xlsxToCSV(await f.arrayBuffer()); }
       else if (/\.xls$/i.test(f.name)) return toast('Arquivo .xls antigo: abra no Excel e salve como .xlsx ou CSV.');
       else text = await f.text();
     } catch (err) { return toast('Não consegui ler o arquivo: ' + (err.message || err)); }

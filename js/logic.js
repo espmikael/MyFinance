@@ -52,7 +52,7 @@ export const DEFAULT_SETTINGS = {
     { id: 'nubank', name: 'Nubank', closing: 3, due: 10, color: '#820AD1', primary: true },
     { id: 'inter', name: 'Inter', closing: null, due: null, color: '#FF7A00', primary: false },
   ],
-  version: 3,
+  version: 4,
   // contas: [{ id, name, kind: 'exact'|'estimate', value, day, category, pay, match, basis, parcels: { total, current, ym } | null }]
   // pay = 'pix' | 'boleto' | 'debito' | 'dinheiro' | id de um cartão (aí ela já entra pela fatura)
   fixed: [],
@@ -64,17 +64,19 @@ export const DEFAULT_SETTINGS = {
   ],
   reserveMonths: 6,
   aporteGoal: 0,
-  // as rubricas da planilha; o teto é só a parte variável (os fixos de cada rubrica somam por cima)
+  // limite do gasto variável no mês: null = automático (entradas − contas − meta de aporte)
+  varLimit: null,
+  // as rubricas da planilha; teto por rubrica é opcional (0 = sem teto, compara com a média)
   categories: [
-    { name: 'Alimentação', budget: 400, fixed: false },
-    { name: 'Mercado', budget: 300, fixed: false },
-    { name: 'Bem-Estar e Saúde', budget: 300, fixed: false },
-    { name: 'Casa', budget: 260, fixed: true },
-    { name: 'Despesas Pessoais', budget: 350, fixed: false },
+    { name: 'Alimentação', budget: 0, fixed: false },
+    { name: 'Mercado', budget: 0, fixed: false },
+    { name: 'Bem-Estar e Saúde', budget: 0, fixed: false },
+    { name: 'Casa', budget: 0, fixed: true },
+    { name: 'Despesas Pessoais', budget: 0, fixed: false },
     { name: 'Educação', budget: 0, fixed: true },
-    { name: 'Lazer e Entretenimento', budget: 120, fixed: false },
-    { name: 'Pequenos gastos', budget: 50, fixed: false },
-    { name: 'Transporte', budget: 280, fixed: false },
+    { name: 'Lazer e Entretenimento', budget: 0, fixed: false },
+    { name: 'Pequenos gastos', budget: 0, fixed: false },
+    { name: 'Transporte', budget: 0, fixed: false },
     { name: 'Viagem', budget: 0, fixed: false },
   ],
 };
@@ -136,6 +138,13 @@ export function withDefaults(saved) {
   if (!Array.isArray(s.hiddenCards)) s.hiddenCards = [];
   // salário cai no mês seguinte ao de referência; as demais entradas, no próprio mês
   s.incomeRules = (s.incomeRules || []).map(r => (r.monthOffset == null ? { ...r, monthOffset: r.key === 'salario' ? 1 : 0 } : r));
+  // v4: sai o teto por rubrica, entra um limite único para o variável (teto por rubrica vira opcional)
+  if ((Number(s.version) || 0) < 4) {
+    s.categories = (s.categories || []).map(c => ({ ...c, budget: 0 }));
+    s.varLimit = null;
+    s.version = 4;
+  }
+  if (s.varLimit != null && !(Number(s.varLimit) >= 0)) s.varLimit = null;
   return s;
 }
 
@@ -503,7 +512,7 @@ export function matchFixed(fixed, txs, ym) {
 
 const txKey = t => t.id ?? t.uid;
 
-export function summarize({ txs, rules, settings, cycle, today, incomes = [] }) {
+export function summarize({ txs, rules, settings, cycle, today, incomes = [], avg = null }) {
   const cats = settings.categories || [];
   const totalDays = daysBetween(cycle.start, cycle.end) + 1;
   const isCurrent = today >= cycle.start && today <= cycle.end;
@@ -536,18 +545,21 @@ export function summarize({ txs, rules, settings, cycle, today, incomes = [] }) 
     const paidLinked = round(mine.reduce((s, f) => s + f.paidAmount, 0));
     const unpaidLinked = round(mine.filter(f => !f.paid).reduce((s, f) => s + f.value, 0));
     const varSpent = round(spentBy[c.name] || 0);
-    const varBudget = Number(c.budget) || 0;
-    const left = round(varBudget - varSpent);
+    const varBudget = Number(c.budget) || 0;          // teto opcional
+    const left = varBudget > 0 ? round(varBudget - varSpent) : null;
+    const average = avg && avg[c.name] > 0 ? avg[c.name] : 0;
+    // comparação com a média: no ciclo atual, contra o que você costuma ter gasto até este ponto; nos fechados, contra o ciclo inteiro
+    const expected = average > 0 ? round(isPast ? average : average * elapsed) : 0;
+    const vsAvg = expected > 0 && !c.fixed && (isPast || (isCurrent && elapsed >= 0.2)) ? Math.round((varSpent / expected - 1) * 100) / 100 : null;
     let status = 'ok';
-    if (varSpent > varBudget + 0.005) status = 'over';
+    if (varBudget > 0 && varSpent > varBudget + 0.005) status = 'over';
     else if (!c.fixed && isCurrent && varBudget > 0 && varSpent > varBudget * elapsed * 1.1) status = 'warn';
+    else if (vsAvg != null && varSpent - expected > 30 && vsAvg >= 0.25) status = 'above';
     const perWeek = (!c.fixed && isCurrent && varBudget > 0) ? round(Math.max(0, left) / Math.max(1, daysLeft / 7)) : null;
-    let varProj = varSpent;
-    if (isCurrent && elapsed > 0) varProj = c.fixed ? Math.max(varSpent, varBudget) : Math.max(varSpent / elapsed, varSpent + Math.max(0, varBudget - varSpent) * (1 - elapsed));
     const spent = round(varSpent + paidLinked);
     const budget = round(varBudget + linked);
-    return { name: c.name, budget, varBudget, varSpent, linked, unpaidLinked, spent, left, status, perWeek,
-      varProj: round(varProj), fixed: !!c.fixed, pct: budget > 0 ? spent / budget : (spent > 0 ? 1 : 0) };
+    return { name: c.name, budget, varBudget, varSpent, linked, unpaidLinked, spent, left, status, perWeek, avg: average, expected, vsAvg,
+      fixed: !!c.fixed, pct: budget > 0 ? spent / budget : (spent > 0 ? 1 : 0) };
   });
 
   const known = new Set(cats.map(c => c.name).concat([IGNORE]));
@@ -555,7 +567,6 @@ export function summarize({ txs, rules, settings, cycle, today, incomes = [] }) 
   const unclassifiedTotal = round(toClassify.reduce((s, t) => s + Number(t.amount), 0));
 
   const varSpent = round(counted.reduce((s, t) => s + Number(t.amount), 0));
-  const varBudget = round(rows.reduce((s, r) => s + r.varBudget, 0));
   const fixedTotal = round(fixedItems.reduce((s, f) => s + f.value, 0));
   const fixedPaid = round(fixedItems.reduce((s, f) => s + f.paidAmount, 0));
   const fixedCost = round(fixedItems.reduce((s, f) => s + (f.paid ? f.paidAmount : f.value), 0)); // o que ainda não foi pago conta pelo valor previsto
@@ -563,11 +574,19 @@ export function summarize({ txs, rules, settings, cycle, today, incomes = [] }) 
   const inc = monthIncomes(settings, incomes, ym);
   const income = inc.total;
 
+  // limite único do variável: o que você definiu, ou o que sobra das entradas depois das contas e da meta de aporte
+  const manual = settings.varLimit != null && Number(settings.varLimit) > 0;
+  const autoLimit = round(income - fixedCost - (Number(settings.aporteGoal) || 0));
+  const varBudget = manual ? round(Number(settings.varLimit)) : income > 0 ? Math.max(0, autoLimit) : 0;
+  const limitMode = manual ? 'manual' : income > 0 ? 'auto' : 'none';
+
   let varProjected = varSpent;
   if (isCurrent && elapsed > 0) {
-    const other = varSpent - rows.reduce((s, r) => s + r.varSpent, 0);   // sem categoria
-    varProjected = round(rows.reduce((s, r) => s + r.varProj, 0) + other / elapsed);
+    varProjected = varBudget > 0
+      ? round(Math.max(varSpent / elapsed, varSpent + Math.max(0, varBudget - varSpent) * (1 - elapsed)))
+      : round(varSpent / elapsed);
   }
+  const varLeft = round(Math.max(0, varBudget - varSpent));
 
   // gasto variável acumulado dia a dia (gráfico do painel), comparado com a soma dos tetos
   const cumulative = [];
@@ -605,8 +624,9 @@ export function summarize({ txs, rules, settings, cycle, today, incomes = [] }) 
     toClassify, unclassifiedTotal, txs: inCycle,
     cumulative, overDay, bySource, topMerchants,
     // quanto ainda cabe por dia nas rubricas variáveis (o que estourou não "empresta" das outras)
-    varLeft: round(rows.filter(r => !r.fixed && r.varBudget > 0).reduce((s, r) => s + Math.max(0, r.left), 0)),
-    perDay: isCurrent ? round(rows.filter(r => !r.fixed && r.varBudget > 0).reduce((s, r) => s + Math.max(0, r.left), 0) / Math.max(1, daysLeft)) : null,
+    limitMode, autoLimit,
+    varLeft,
+    perDay: isCurrent && varBudget > 0 ? round(varLeft / Math.max(1, daysLeft)) : null,
   };
 }
 
@@ -761,14 +781,11 @@ export function monthPlan({ settings, txs, rules, incomes, ym }) {
   const income = monthIncomes(settings, incomes, ym).total;
   const committed = round(exactOut + estOut + onCard);
   const free = round(income - committed);
-  let need = 0;
-  for (const c of settings.categories || []) {
-    if (c.fixed || !(Number(c.budget) > 0)) continue;
-    const inside = sum(all.filter(b => b.onCard && b.category === c.name));
-    need += Math.max(0, Number(c.budget) - inside);
-  }
-  need = round(need);
-  return { ym, exact, est, all, exactOut, estOut, onCard, income, committed, free, tetoNeed: need, slack: round(free - need) };
+  const aporte = Number(settings.aporteGoal) || 0;
+  const forVar = round(free - aporte);                       // o que dá para gastar variando, já guardando o aporte
+  const manual = settings.varLimit != null && Number(settings.varLimit) > 0 ? round(Number(settings.varLimit)) : null;
+  return { ym, exact, est, all, exactOut, estOut, onCard, income, committed, free, aporte, forVar, manual,
+    slack: manual != null ? round(forVar - manual) : forVar };
 }
 
 // Fatura aberta de cada cartão.
