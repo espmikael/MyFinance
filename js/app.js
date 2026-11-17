@@ -1,5 +1,5 @@
-import * as L from './logic.js?v=20261117g';
-import { SUPABASE_URL, SUPABASE_ANON_KEY } from './config.js?v=20261117g';
+import * as L from './logic.js?v=20261117h';
+import { SUPABASE_URL, SUPABASE_ANON_KEY } from './config.js?v=20261117h';
 
 const $app = document.getElementById('app');
 const $toast = document.getElementById('toast');
@@ -326,8 +326,7 @@ function viewHome(s) {
       <div class="actions"><button class="btn primary" data-act="upload">Enviar fatura</button><button class="btn" data-act="view" data-v="mes">Entradas e contas</button></div>
     </div>`;
   }
-  const w = s.week, prev = w ? s.weeks[s.weeks.indexOf(w) - 1] : null;
-  const prevOver = prev && prev.limit != null && prev.spent - prev.limit > 1 ? `<div class="notice"><span>A semana de ${L.ddmm(prev.start)} a ${L.ddmm(prev.end)} passou <b>${money(prev.spent - prev.limit)}</b> do liberado. Esse valor saiu das semanas que faltam: por isso esta liberou menos.</span></div>` : '';
+  const prevOver = weekReview(s);
   return `${pageHead('Início', sub)}
     ${lastBatchNotice()}
     ${uploadNudge()}
@@ -339,6 +338,30 @@ function viewHome(s) {
       <div class="col-main">${possoCard(s)}${agendaCard(s)}</div>
       <div class="col-side">${cardsCard()}${flagsCard(s)}</div>
     </div>`;
+}
+
+// Fechamento da semana passada: aparece quando a fatura dela já foi enviada, até você dispensar
+function weekReview(s) {
+  const w = s.week;
+  if (!w || w.limit == null) return '';
+  let prev = s.weeks[s.weeks.indexOf(w) - 1], ps = s;
+  if (!prev) { ps = summary(L.shiftCycle(s.cycle.start, -1, card().closing || 1)); prev = ps.weeks[ps.weeks.length - 1]; }
+  if (!prev || prev.limit == null) return '';
+  let gone = false; try { gone = localStorage.getItem('mf-wk-' + prev.start) === '1'; } catch (e) {}
+  const up = lastUploadDay();
+  if (gone || !up || up < prev.end) return '';
+  const diff = prev.spent - prev.limit;
+  const inWeek = ps.txs.filter(t => t.date >= prev.start && t.date <= prev.end && !t.isFixed && !t.commit && t.cat !== L.IGNORE && t.amount > 0);
+  const top = [...inWeek].sort((a, b) => b.amount - a.amount).slice(0, 3);
+  const byCat = {};
+  for (const t of inWeek) byCat[t.cat] = (byCat[t.cat] || 0) + t.amount;
+  const topCat = Object.entries(byCat).sort((a, b) => b[1] - a[1])[0];
+  return `<section class="card review" aria-labelledby="wr-h">
+    <div class="card-head"><h2 id="wr-h">Fechamento da semana ${L.ddmm(prev.start)}–${L.ddmm(prev.end)}</h2><button class="icon-btn sm" data-act="week-dismiss" data-w="${prev.start}" aria-label="Dispensar fechamento">${icon('x', 16)}</button></div>
+    <div class="rv-top"><span><small>Gastou</small><b>${money(prev.spent)}</b></span><span><small>Liberado</small><b>${money(prev.limit)}</b></span><span><small>${diff > 0 ? 'Passou' : 'Sobrou'}</small><b class="${diff > 0 ? 'neg' : 'pos'}">${money(Math.abs(diff))}</b></span></div>
+    <p class="small" style="margin:10px 0 6px;color:var(--text-2)">${diff > 0 ? `Os ${money(diff)} a mais saíram das semanas que faltam.` : diff < -0.5 ? `Os ${money(-diff)} que sobraram foram para as semanas que faltam.` : 'Fechou exatamente no liberado.'} Esta semana libera <b>${money(w.limit)}</b>.${topCat ? ` Onde mais foi: <b>${esc(topCat[0])}</b> (${money(topCat[1])}).` : ''}</p>
+    ${top.length ? `<div class="rv-list">${top.map(t => `<div><span>${esc(L.prettyTitle(t.title))}<small>${L.weekdayShort(t.date)} ${L.ddmm(t.date)} · ${esc(t.cat)}</small></span><b>${money(t.amount)}</b></div>`).join('')}</div>` : ''}
+  </section>`;
 }
 
 function weekHero(s) {
@@ -364,6 +387,7 @@ function weekHero(s) {
       <div class="wfoot">
         <span><span>${over ? 'O que passou sai das próximas semanas' : `Por dia até ${L.weekdayShort(w.end) === 'dom' ? 'domingo' : L.ddmm(w.end)}`}</span><b>${over ? '' : '≈ ' + money(w.perDay)}</b></span>
         <span><span>Cartão conferido até</span><b>${up ? `${L.weekdayShort(up)} ${L.ddmm(up)}` : 'nenhum envio'}</b></span>
+        ${s.committed > 0 ? `<span><span>Parcelas e assinaturas (fora da semana)</span><b>${money(s.committed)}</b></span>` : ''}
       </div>
     </div>`;
 }
@@ -373,12 +397,12 @@ function homeNumbers(s) {
   const sobra = s.isCurrent ? s.leftover : s.result;
   const next = inc.find(i => !i.received);
   const k = (label, value, bar, foot, cls = '', act = '') => `<${act ? 'button' : 'div'} class="kcard" ${act}><span class="kl">${label}</span><span class="kv ${cls}">${value}</span>${bar}<span class="ks">${foot}</span></${act ? 'button' : 'div'}>`;
-  const limBar = s.varBudget > 0 ? `<div class="thinbar" aria-hidden="true"><i style="width:${Math.min(100, Math.round(s.varSpent / s.varBudget * 100))}%"></i></div>` : '';
+  const limBar = s.freeBudget > 0 ? `<div class="thinbar ${s.freeSpent > s.freeBudget ? 'over' : ''}" aria-hidden="true"><i style="width:${Math.min(100, Math.round(s.freeSpent / s.freeBudget * 100))}%"></i></div>` : '';
   const sCls = s.income > 0 ? (sobra < 0 ? 'neg' : 'pos') : '';
   const cards = [
-    k('Limite do mês', s.varBudget > 0 ? money(s.varBudget) : '—', limBar, `gasto ${money(s.varSpent)}`),
+    k('Dia a dia no mês', s.freeBudget > 0 ? money(s.freeBudget) : '—', limBar, `gasto ${money(s.freeSpent)}`),
     k('Próxima entrada', next ? money(next.amount) : '—', '', next ? `${esc(next.name.toLowerCase())} · ${L.weekdayShort(next.date)} ${L.ddmm(next.date)}` : 'todas recebidas', next ? 'pos' : ''),
-    k('Sobra prevista', s.income > 0 ? (sobra >= 0 && !state.priv ? '+' : '') + signed(sobra) : '—', '', 'no ritmo atual ›', sCls, 'data-act="view" data-v="mes" aria-label="Ver o mês"'),
+    k('Sobra prevista', s.income > 0 ? (sobra >= 0 && !state.priv ? '+' : '') + signed(sobra) : '—', '', 'no ritmo do dia a dia ›', sCls, 'data-act="view" data-v="mes" aria-label="Ver o mês"'),
   ].join('');
   return `<div class="only-desk"><section class="kgrid" aria-label="Resumo">${weekHero(s)}${cards}</section></div>
     <div class="only-mob" style="display:flex;flex-direction:column;gap:14px">${weekHero(s)}<section class="mini3" aria-label="Resumo do mês">${cards}</section></div>`;
@@ -428,18 +452,22 @@ function agendaCard(s) {
   } else if (hasBal && ag.min) {
     alert = `<div class="alert good">${icon('check', 20, 2.4)}<span><b>A conta não fica negativa nesse período.</b> Ponto mais baixo: ${money(ag.min.balance)} em ${L.ddmm(ag.min.date)}.</span></div>`;
   }
-  const rows = ag.events.map(e => `<div class="ev">
+  const lim = L.addDays(today(), 7);
+  const shown = state.agendaAll ? ag.events : ag.events.filter(e => e.date <= lim);
+  const hiddenN = ag.events.length - shown.length;
+  const rows = shown.map(e => `<div class="ev">
       <span class="d"><b>${L.ddmm(e.date)}</b><small>${L.weekdayShort(e.date)}</small></span>
       <span class="p ${e.kind}" aria-hidden="true"></span>
       <span class="t"><b>${esc(e.title)}</b><small class="${e.balance != null && e.balance < 0 && e.kind !== 'info' ? 'neg' : ''}">${e.kind === 'info' ? esc(e.sub) : e.balance != null ? `${esc(e.sub)} · saldo ${signed(e.balance)}` : esc(e.sub)}</small></span>
       <span class="a ${e.amount > 0 ? 'in' : ''}">${e.kind === 'info' ? '' : (e.amount > 0 && !state.priv ? '+' : '') + signed(e.amount)}${e.bill && e.bill.ym <= today().slice(0, 7) ? `<button class="pill" data-act="fix-pay" data-i="${e.bill.index}" data-ym="${e.bill.ym}">Marcar paga</button>` : ''}</span>
     </div>`).join('');
   return `<section class="card" aria-labelledby="ag-h">
-    <div class="card-head"><h2 id="ag-h">Agenda do dinheiro</h2><span class="sub">próximas 5 semanas</span></div>
+    <div class="card-head"><h2 id="ag-h">Agenda do dinheiro</h2><span class="sub">${state.agendaAll ? 'próximas 5 semanas' : 'próximos 7 dias'}</span></div>
     <div class="balbox"><span>Saldo na conta ${hasBal ? `<b>${money(ag.start)}</b>${stale ? ` <span class="muted">· de ${L.ddmm(ag.balanceDate)}</span>` : ''}` : '<b>não informado</b>'}</span><button class="btn small" data-act="balance">${hasBal ? 'Atualizar' : 'Informar saldo'}</button></div>
     ${alert ? `<div style="margin-top:10px">${alert}</div>` : ''}
     ${!hasBal ? '<p class="help">Com o saldo da conta, a agenda mostra quanto sobra depois de cada entrada e saída e avisa antes de ficar no negativo.</p>' : ''}
-    <div class="agenda" style="margin-top:6px">${rows || '<p class="help">Nada previsto nas próximas semanas.</p>'}</div>
+    <div class="agenda" style="margin-top:6px">${rows || `<p class="help">Nada previsto nos próximos 7 dias.</p>`}</div>
+    ${hiddenN > 0 || state.agendaAll ? `<button class="row add" data-act="agenda-all">${state.agendaAll ? 'Mostrar só os próximos 7 dias' : `Ver as próximas 5 semanas (+${hiddenN})`}</button>` : ''}
   </section>`;
 }
 
@@ -482,12 +510,12 @@ function flagsCard(s) {
     const over = r.status === 'over', above = r.status === 'above';
     const tag = over ? 'teto estourado' : above ? `+${Math.round(r.vsAvg * 100)}% da média` : 'acima do ritmo';
     const txt = over ? `${money(r.varSpent)} de ${money(r.varBudget)}. Os ${money(-r.left)} a mais saem da sobra do mês.`
-      : above ? `${money(r.varSpent)} até agora. Neste ponto do ciclo você costuma estar em ${money(r.expected)}.`
+      : above ? `${money(r.freeSpent)} até agora, sem parcelas e assinaturas. Neste ponto do ciclo você costuma estar em ${money(r.expected)}.`
       : `${money(r.varSpent)} de ${money(r.varBudget)} com ${pct(s.elapsed)} do ciclo.`;
     const base = r.varBudget > 0 ? r.varBudget : r.avg;
     return `<button class="attc ${over ? 'o' : 'w'}" data-act="cat-open" data-c="${esc(r.name)}">
       <span class="h"><b>${esc(r.name)}</b><span class="tag">${tag}</span></span>
-      <span class="segbar thin" aria-hidden="true">${segs(N, Math.min(N, Math.round(r.varSpent / Math.max(1, base) * N)), over ? 'of' : 'wf')}</span>
+      <span class="segbar thin" aria-hidden="true">${segs(N, Math.min(N, Math.round((over ? r.varSpent : r.freeSpent) / Math.max(1, base) * N)), over ? 'of' : 'wf')}</span>
       <p>${txt}</p></button>`;
   }).join('');
   return `<section class="card" aria-labelledby="rb-h">
@@ -563,8 +591,8 @@ function viewMes() {
   const canPay = ym <= today().slice(0, 7);
   const cardOut = m.isPast ? m.varSpent : m.varProjected;
   const sobra = m.income - m.fixedCost - cardOut;
-  const sobraLbl = m.isPast ? 'Sobra do mês' : future ? 'Sobra antes do cartão' : 'Sobra prevista no ritmo atual';
-  const inLimit = m.isCurrent && m.varBudget > 0 ? m.income - m.fixedCost - Math.max(m.varBudget, m.varSpent) : null;
+  const sobraLbl = m.isPast ? 'Sobra do mês' : future ? 'Sobra prevista' : 'Sobra prevista no ritmo do dia a dia';
+  const inLimit = m.isCurrent && m.varBudget > 0 ? m.income - m.fixedCost - m.planProjected : null;
   const aporte = Number(state.settings.aporteGoal) || 0;
 
   const base = Math.max(1, m.income, m.fixedCost + cardOut);
@@ -576,7 +604,7 @@ function viewMes() {
     ['= Sobra', 0, Math.max(0, sobra), sobra < 0 ? 'var(--over-fill)' : 'var(--ok-fill)', signed(sobra), sobra < 0 ? 'neg' : 'pos'],
   ].map(([l, x, w, col, v, cls]) => `<div class="flow"><span>${l}</span><span class="fb" aria-hidden="true"><i style="left:${W(Math.max(0, x))};width:${W(w)};background:${col}"></i></span><b class="${cls}">${v}</b></div>`).join('');
 
-  const limSub = (m.limitMode === 'manual' ? 'definido por você' : 'entradas − contas − aporte') + (plan.onCard > 0 ? ` · inclui ${money(plan.onCard)} de parcelas já no cartão` : '');
+  const limSub = m.limitMode === 'manual' ? 'definido por você' : 'entradas − contas − aporte';
   const bad = plan.income > 0 && plan.forVar < 0 ? `<div class="alert bad" style="margin-top:12px">${icon('warn', 20)}<span><b>As contas${plan.aporte > 0 ? ' e o aporte' : ''} já passam das entradas.</b> Faltam ${money(-plan.forVar)} antes de qualquer gasto variável.</span></div>`
     : plan.manual != null && plan.slack < 0 ? `<div class="alert bad" style="margin-top:12px">${icon('warn', 20)}<span><b>Seu limite de ${money(plan.manual)} não cabe.</b> Ficam livres ${money(plan.forVar)}${plan.aporte > 0 ? ' depois do aporte' : ''}.</span></div>` : '';
 
@@ -607,7 +635,7 @@ function viewMes() {
         : canPay ? `<button class="pill" data-act="fix-pay" data-i="${f.index}" data-ym="${ym}">Marcar paga</button>` : `<span class="pill ghost">a pagar</span>`}</span>
     </div>`;
   }).join('');
-  const onCard = plan.all.filter(b => b.onCard);
+  const onCard = plan.all.filter(b => b.onCard && !b.auto);   // as parcelas detectadas ficam em Compromissos do cartão
 
   return `${pageHead('Mês', '', headActions())}
     <div class="cycle">
@@ -620,9 +648,16 @@ function viewMes() {
         <section class="card" aria-labelledby="sb-h">
           <span id="sb-h" class="k">${sobraLbl}</span>
           <span class="big ${m.income > 0 ? (sobra < 0 ? 'neg' : 'pos') : ''}" style="display:block;margin:4px 0">${m.income > 0 ? (sobra >= 0 && !state.priv ? '+' : '') + signed(sobra) : '—'}</span>
-          ${inLimit != null ? `<p class="small" style="margin:0 0 12px;color:var(--text-2)">Se ficar dentro do limite, sobram <b>${money(inLimit)}</b>${aporte > 0 && Math.abs(inLimit - aporte) < 1 ? ': o aporte planejado' : ''}.</p>` : ''}
+          ${inLimit != null ? `<p class="small" style="margin:0 0 12px;color:var(--text-2)">Seguindo o liberado de cada semana, sobram <b>${money(inLimit)}</b>${aporte > 0 && Math.abs(inLimit - aporte) < 1 ? ': o aporte planejado' : ''}.</p>` : ''}
           <div class="flows">${flow}</div>
-          ${m.varBudget > 0 ? `<div class="limbox"><span><b>Limite do variável: ${money(m.varBudget)}</b><small>${limSub}</small></span><button class="btn small" data-act="view" data-v="ajustes">Ajustar</button></div>` : ''}
+          ${m.varBudget > 0 ? `<div class="limbox"><span><b>Limite do variável: ${money(m.varBudget)}</b><small>${limSub}</small></span><button class="btn small" data-act="view" data-v="ajustes">Ajustar</button></div>
+          <div class="splitlim">
+            <div><small>Parcelas e assinaturas no cartão</small><b>${money(m.committed)}</b></div>
+            <div><small>Livre para o dia a dia</small><b class="pos">${money(m.freeBudget)}</b></div>
+          </div>
+          ${m.commits.actual.length + m.commits.pending.length ? `<details class="oncard"><summary><span><b>Compromissos do cartão</b><small>já descontados do limite; não pesam na semana</small></span><b>${money(m.committed)}</b></summary>
+            ${[...m.commits.actual, ...m.commits.pending].map(c => `<div class="lrow"><span class="m"><b>${esc(L.prettyTitle(c.title))}</b><small>${c.kind}${c.pending ? ' · ainda não veio na fatura' : ' · ' + L.ddmm(c.date)}</small></span><span class="r"><b class="${c.pending ? 'muted' : ''}">${money(c.amount)}</b></span></div>`).join('')}
+          </details>` : ''}` : ''}
           ${bad}
         </section>
         <section class="card" aria-labelledby="en-h">
@@ -635,7 +670,7 @@ function viewMes() {
         <section class="card" aria-labelledby="ct-h">
           <div class="card-head"><h2 id="ct-h">Contas</h2><span class="sub"><b style="color:var(--text)">${money(m.fixedCost)}</b> · ${paidN} de ${fx.length} pagas</span></div>
           ${fxRows || `<p class="help">Nenhuma conta fora do cartão em ${mName(ym)}.</p>`}
-          ${onCard.length ? `<details class="oncard"><summary><span><b>No cartão</b><small>${onCard.length} ${onCard.length === 1 ? 'item' : 'itens'} · já entram na fatura, não somam aqui</small></span><b>${money(plan.onCard)}</b></summary>${onCard.map(billRow).join('')}</details>` : ''}
+          ${onCard.length ? `<details class="oncard"><summary><span><b>Cadastradas no cartão</b><small>${onCard.length} ${onCard.length === 1 ? 'conta' : 'contas'} · vêm na fatura, não somam aqui</small></span><b>${money(onCard.reduce((x, b) => x + b.value, 0))}</b></summary>${onCard.map(billRow).join('')}</details>` : ''}
           <div class="actions"><button class="btn primary grow" data-act="bill-new" data-ym="${ym}">${icon('plus', 16, 2.4)}Nova conta</button></div>
         </section>
       </div>
@@ -684,7 +719,7 @@ function gastosList(s) {
   const ini = name => { const w = L.prettyTitle(name).replace(/^iFood · /, 'iF ').split(/\s+/).filter(Boolean); return esc(((w[0] || '?')[0] + (w[1] ? w[1][0] : '')).toUpperCase()); };
   const html = days.map(d => `<div class="day"><span>${longDay(d.date)}</span><span>${money(d.sum)}</span></div><div class="daybox">${d.items.map(t => {
     const isUnc = !known.has(t.cat);
-    const sub = isUnc ? 'Sem rubrica · toque para classificar' : `${t.cat === L.IGNORE ? 'Ignorado' : esc(t.cat)} · ${esc(sourceName(t.source))}${t.isFixed ? ` · conta de ${L.MONTHS[+t.date.slice(5, 7) - 1]}` : t.manual ? ' · à mão' : ''}`;
+    const sub = isUnc ? 'Sem rubrica · toque para classificar' : `${t.cat === L.IGNORE ? 'Ignorado' : esc(t.cat)} · ${esc(sourceName(t.source))}${t.isFixed ? ` · conta de ${L.MONTHS[+t.date.slice(5, 7) - 1]}` : t.commit ? ` · ${t.commit}` : ''}${t.manual ? ' · à mão' : ''}`;
     return `<button class="tx ${t.cat === L.IGNORE ? 'ign' : ''}" data-act="tx" data-id="${t.id}">
       <span class="av ${isUnc ? 'unc' : ''}">${ini(t.title)}</span>
       <span class="t"><span>${esc(L.prettyTitle(t.title))}</span><span class="c ${isUnc ? 'unc' : ''}">${sub}</span></span>
@@ -809,14 +844,16 @@ function viewAnalise(s) {
   ];
 
   // referência de cada rubrica: o teto (se houver) ou a média do ciclo inteiro, mais as contas dela
+  // gasto mostrado = dia a dia (sem parcelas e assinaturas) + contas da rubrica, para comparar com a média, que também é do dia a dia
+  const shownOf = r => r.varBudget > 0 ? r.spent : Math.round((r.spent - r.varSpent + r.freeSpent) * 100) / 100;
   const refOf = r => r.varBudget > 0 ? r.budget : r.avg > 0 ? Math.round((r.avg + r.linked) * 100) / 100 : r.linked;
   const refLbl = r => r.varBudget > 0 ? `teto ${money(r.budget)}` : r.avg > 0 ? `média ${money(refOf(r))}` : r.linked > 0 ? `contas ${money(r.linked)}` : '';
-  const maxBar = Math.max(1, ...s.rows.map(r => Math.max(r.spent, refOf(r)))) * 1.05;
-  const bars = s.rows.filter(r => r.spent > 0 || refOf(r) > 0).sort((a, b) => b.spent - a.spent).map(r => {
-    const ref = refOf(r), over = r.varBudget > 0 ? r.spent > r.budget : r.status === 'above';
-    return `<div class="hbar" title="${esc(r.name)}: ${money(r.spent)}${refLbl(r) ? ' · ' + refLbl(r) : ''}">
-      <div class="lab"><span>${esc(r.name)}</span><span><b>${money(r.spent)}</b> <span class="muted">${refLbl(r)}</span></span></div>
-      <div class="trk"><div class="val ${over ? 'over' : ''}" style="width:${(r.spent / maxBar * 100).toFixed(1)}%"></div>${ref > 0 ? `<div class="tick" style="left:${(ref / maxBar * 100).toFixed(1)}%"></div>` : ''}</div>
+  const maxBar = Math.max(1, ...s.rows.map(r => Math.max(shownOf(r), refOf(r)))) * 1.05;
+  const bars = s.rows.filter(r => shownOf(r) > 0 || refOf(r) > 0).sort((a, b) => shownOf(b) - shownOf(a)).map(r => {
+    const ref = refOf(r), sp = shownOf(r), over = r.varBudget > 0 ? r.spent > r.budget : r.status === 'above';
+    return `<div class="hbar" title="${esc(r.name)}: ${money(sp)}${refLbl(r) ? ' · ' + refLbl(r) : ''}">
+      <div class="lab"><span>${esc(r.name)}</span><span><b>${money(sp)}</b> <span class="muted">${refLbl(r)}</span></span></div>
+      <div class="trk"><div class="val ${over ? 'over' : ''}" style="width:${(sp / maxBar * 100).toFixed(1)}%"></div>${ref > 0 ? `<div class="tick" style="left:${(ref / maxBar * 100).toFixed(1)}%"></div>` : ''}</div>
     </div>`;
   }).join('');
 
@@ -850,7 +887,7 @@ function viewAnalise(s) {
       </section>
       <section class="card full">
         <div class="card-head"><h2>Por rubrica</h2></div>
-        <div class="legend"><span><span class="sw-bar"></span>Gasto</span><span><span class="sw-tick"></span>Sua média (ou teto) + contas</span></div>
+        <div class="legend"><span><span class="sw-bar"></span>Gasto do dia a dia + contas</span><span><span class="sw-tick"></span>Sua média (ou teto) + contas</span></div>
         <div class="bars">${bars}</div>
       </section>
     </div>`}`;
@@ -1134,6 +1171,8 @@ document.addEventListener('click', async e => {
     case 'pc-cat': state.pc.cat = el.dataset.v; return refreshPC();
     case 'home-tab': state.homeTab = el.dataset.v; { const y = window.scrollY; render(); window.scrollTo(0, y); } return;
     case 'balance': return balanceSheet();
+    case 'agenda-all': state.agendaAll = !state.agendaAll; { const y = window.scrollY; render(); window.scrollTo(0, y); } return;
+    case 'week-dismiss': try { localStorage.setItem('mf-wk-' + el.dataset.w, '1'); } catch (e) {} { const y = window.scrollY; render(); window.scrollTo(0, y); } return;
     case 'contas-kind': state.contasKind = el.dataset.v; { const y = window.scrollY; render(); window.scrollTo(0, y); } return;
     case 'contas-month': state.contasMonth = L.ymAdd(state.contasMonth || L.monthOfCycle(curCycle()), Number(el.dataset.d)); return render();
     case 'bill-new': return billSheet(null, el.dataset.ym || state.month || defaultMonth(), el.dataset.kind || 'exact');
@@ -1347,7 +1386,7 @@ function pickFile() {
     if (f.size > 15e6) return toast('Arquivo grande demais para uma fatura.');
     let text;
     try {
-      if (/\.xlsx$/i.test(f.name)) { const X = await import('./xlsx.js?v=20261117g'); text = await X.xlsxToCSV(await f.arrayBuffer()); }
+      if (/\.xlsx$/i.test(f.name)) { const X = await import('./xlsx.js?v=20261117h'); text = await X.xlsxToCSV(await f.arrayBuffer()); }
       else if (/\.xls$/i.test(f.name)) return toast('Arquivo .xls antigo: abra no Excel e salve como .xlsx ou CSV.');
       else text = await f.text();
     } catch (err) { return toast('Não consegui ler o arquivo: ' + (err.message || err)); }
@@ -1432,34 +1471,45 @@ function uploadSheet(fileName, parsed) {
 
 // ----- Lançar gasto ou entrada -----
 function lancarSheet(mode, dateDefault) {
-  const srcs = [...L.METHODS, ...state.settings.cards.map(c => ({ id: c.id, name: c.name, color: c.color }))];
+  const srcs = [...state.settings.cards.map(c => ({ id: c.id, name: c.name, color: c.color })), ...L.METHODS];
   const rules = state.settings.incomeRules || [];
+  // abre com o último jeito de pagar usado e com as 4 rubricas que você mais usa
+  let src0 = null; try { src0 = localStorage.getItem('mf-last-src'); } catch (e) {}
+  if (!srcs.some(x => x.id === src0)) src0 = card().id;
+  const since = L.addDays(today(), -90), freq = {};
+  for (const t of state.txs) if (t.date >= since) { const c = L.categoryOf(t, state.rules); freq[c] = (freq[c] || 0) + 1; }
+  const ordered = [...catNames()].sort((a, b) => (freq[b] || 0) - (freq[a] || 0));
+  const topCats = ordered.slice(0, 4), restCats = ordered.slice(4);
   const html = `<div class="head"><h2>Lançar</h2>
       <div class="seg" role="group" aria-label="Tipo de lançamento"><button data-mode="gasto" aria-pressed="${mode === 'gasto'}">Gasto</button><button data-mode="entrada" aria-pressed="${mode === 'entrada'}">Entrada</button></div></div>
     <div class="field"><label for="lv">Valor</label><div class="money"><span>R$</span><input id="lv" inputmode="decimal" placeholder="0,00" autofocus></div></div>
-    <div class="field"><label for="ld">Descrição</label><input class="input" id="ld" placeholder="${mode === 'entrada' ? 'ex.: 13º salário, freela, reembolso' : 'ex.: almoço, Renner, mestrado'}"></div>
     <div data-g>
+      <div class="lbl" style="margin-top:14px">Rubrica</div>
+      <div class="wrapchips">${topCats.map(c => `<button class="chip" data-cat="${esc(c)}" aria-pressed="false">${esc(c)}</button>`).join('')}${restCats.length ? `<button class="chip dashed" data-more aria-expanded="false">Outras ›</button>` : ''}
+        ${restCats.map(c => `<button class="chip" data-cat="${esc(c)}" aria-pressed="false" data-rest hidden>${esc(c)}</button>`).join('')}</div>
       <div class="lbl" style="margin-top:14px">Como pagou</div>
-      <div class="wrapchips">${srcs.map((s, i) => `<button class="chip" data-src="${esc(s.id)}" aria-pressed="${i === 0}"><span class="dot" style="background:${safeColor(s.color)}"></span>${esc(s.name)}</button>`).join('')}</div>
-      <div class="lbl" style="margin-top:14px">Categoria</div>
-      <div class="wrapchips">${catNames().map(c => `<button class="chip" data-cat="${esc(c)}" aria-pressed="false">${esc(c)}</button>`).join('')}</div>
+      <div class="wrapchips">${srcs.map(s => `<button class="chip" data-src="${esc(s.id)}" aria-pressed="${s.id === src0}"><span class="dot" style="background:${safeColor(s.color)}"></span>${esc(s.name)}</button>`).join('')}</div>
     </div>
+    <div class="field"><label for="ld">Descrição <span class="muted" data-g style="font-weight:400">(opcional)</span></label><input class="input" id="ld" placeholder="${mode === 'entrada' ? 'ex.: 13º salário, freela, reembolso' : 'ex.: almoço, Renner'}"></div>
     <div data-e hidden>
       <div class="lbl" style="margin-top:14px">É uma entrada fixa?</div>
       <div class="wrapchips"><button class="chip" data-rk="" aria-pressed="true">Avulsa</button>${rules.map(r => `<button class="chip" data-rk="${esc(r.key)}" aria-pressed="false">${esc(r.name)}</button>`).join('')}</div>
     </div>
+    <details class="more" ${dateDefault && dateDefault !== today() ? 'open' : ''}><summary>Data e parcelas <span class="muted">· ${dateDefault && dateDefault !== today() ? L.ddmm(dateDefault) : 'hoje'}, à vista</span></summary>
     <div class="grid2">
       <div class="field"><label for="ldt">Data</label><input class="input" id="ldt" type="date" value="${dateDefault || today()}"></div>
       <div class="field" data-g><label for="lp">Parcelas</label><input class="input" id="lp" type="number" min="1" max="24" value="1"></div>
-    </div>
+    </div></details>
     <div class="err" data-err></div>
     <div class="actions"><button class="btn primary grow" data-save>Lançar gasto</button><button class="btn ghost" data-close>Cancelar</button></div>`;
 
   openSheet(html, (sh, close) => {
-    let src = srcs[0].id, cat = null, rk = '';
+    let src = src0, cat = null, rk = '';
+    sh.$('[data-more]')?.addEventListener('click', e => { const b = e.currentTarget; b.hidden = true; sh.$$('[data-rest]').forEach(x => (x.hidden = false)); });
     const setMode = m => {
       mode = m;
       sh.$$('[data-g]').forEach(x => (x.hidden = m !== 'gasto'));
+      sh.$('#ld').placeholder = m === 'entrada' ? 'ex.: 13º salário, freela, reembolso' : 'ex.: almoço, Renner';
       sh.$$('[data-e]').forEach(x => (x.hidden = m !== 'entrada'));
       sh.$('[data-save]').textContent = m === 'gasto' ? 'Lançar gasto' : 'Registrar entrada';
     };
@@ -1471,11 +1521,12 @@ function lancarSheet(mode, dateDefault) {
     sh.$('[data-save]').addEventListener('click', async () => {
       const err = sh.$('[data-err]');
       const amount = num(sh.$('#lv').value);
-      const title = sh.$('#ld').value.trim();
+      const title = sh.$('#ld').value.trim() || (mode === 'gasto' ? (cat || 'Gasto') : '');
       const date = sh.$('#ldt').value || today();
       if (!(amount > 0)) { err.textContent = 'Informe um valor maior que zero.'; return; }
       if (mode === 'gasto') {
-        if (!title) { err.textContent = 'Escreva uma descrição.'; return; }
+        if (!cat && !sh.$('#ld').value.trim()) { err.textContent = 'Escolha a rubrica ou escreva uma descrição.'; return; }
+        try { localStorage.setItem('mf-last-src', src); } catch (e) {}
         const n = Math.min(24, Math.max(1, parseInt(sh.$('#lp').value, 10) || 1));
         const rows = L.installmentRows({ date, title, amount, n, source: src, category: cat }).map(r => ({ ...r, user_id: state.user.id }));
         const { error } = await sb.from('transactions').insert(rows);

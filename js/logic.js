@@ -552,12 +552,16 @@ export function summarize({ txs, rules, settings, cycle, today, incomes = [], av
   for (const m of new Set([cycle.start.slice(0, 7), cycle.end.slice(0, 7)]))
     for (const f of matchFixed(billsOut(settings, m, txs, rules), monthTx(m), m)) if (f.tx) fixedTx.add(txKey(f.tx));
 
+  const commits = cardCommitments({ txs, rules, settings, cycle, today });
   const inCycle = txs.filter(t => t.date >= cycle.start && t.date <= cycle.end).map(withCat)
-    .map(t => (fixedTx.has(txKey(t)) ? { ...t, isFixed: true } : t));
+    .map(t => (fixedTx.has(txKey(t)) ? { ...t, isFixed: true } : commits.kinds.has(txKey(t)) ? { ...t, commit: commits.kinds.get(txKey(t)) } : t));
   const counted = inCycle.filter(t => t.cat !== IGNORE && !t.isFixed);
 
-  const spentBy = {};
-  for (const t of counted) spentBy[t.cat] = (spentBy[t.cat] || 0) + Number(t.amount);
+  const spentBy = {}, freeBy = {};
+  for (const t of counted) {
+    spentBy[t.cat] = (spentBy[t.cat] || 0) + Number(t.amount);
+    if (!t.commit) freeBy[t.cat] = (freeBy[t.cat] || 0) + Number(t.amount);
+  }
 
   const rows = cats.map(c => {
     const mine = fixedItems.filter(f => f.category === c.name);
@@ -565,20 +569,21 @@ export function summarize({ txs, rules, settings, cycle, today, incomes = [], av
     const paidLinked = round(mine.reduce((s, f) => s + f.paidAmount, 0));
     const unpaidLinked = round(mine.filter(f => !f.paid).reduce((s, f) => s + f.value, 0));
     const varSpent = round(spentBy[c.name] || 0);
+    const freeSpent = round(freeBy[c.name] || 0);     // sem parcelas e assinaturas: o que se decide no dia a dia
     const varBudget = Number(c.budget) || 0;          // teto opcional
     const left = varBudget > 0 ? round(varBudget - varSpent) : null;
     const average = avg && avg[c.name] > 0 ? avg[c.name] : 0;
     // comparação com a média: no ciclo atual, contra o que você costuma ter gasto até este ponto; nos fechados, contra o ciclo inteiro
     const expected = average > 0 ? round(isPast ? average : average * elapsed) : 0;
-    const vsAvg = expected > 0 && !c.fixed && (isPast || (isCurrent && elapsed >= 0.2)) ? Math.round((varSpent / expected - 1) * 100) / 100 : null;
+    const vsAvg = expected > 0 && !c.fixed && (isPast || (isCurrent && elapsed >= 0.2)) ? Math.round((freeSpent / expected - 1) * 100) / 100 : null;
     let status = 'ok';
     if (varBudget > 0 && varSpent > varBudget + 0.005) status = 'over';
     else if (!c.fixed && isCurrent && varBudget > 0 && varSpent > varBudget * elapsed * 1.1) status = 'warn';
-    else if (vsAvg != null && varSpent - expected > 30 && vsAvg >= 0.25) status = 'above';
+    else if (vsAvg != null && freeSpent - expected > 30 && vsAvg >= 0.25) status = 'above';
     const perWeek = (!c.fixed && isCurrent && varBudget > 0) ? round(Math.max(0, left) / Math.max(1, daysLeft / 7)) : null;
     const spent = round(varSpent + paidLinked);
     const budget = round(varBudget + linked);
-    return { name: c.name, budget, varBudget, varSpent, linked, unpaidLinked, spent, left, status, perWeek, avg: average, expected, vsAvg,
+    return { name: c.name, budget, varBudget, varSpent, freeSpent, linked, unpaidLinked, spent, left, status, perWeek, avg: average, expected, vsAvg,
       fixed: !!c.fixed, pct: budget > 0 ? spent / budget : (spent > 0 ? 1 : 0) };
   });
 
@@ -600,24 +605,31 @@ export function summarize({ txs, rules, settings, cycle, today, incomes = [], av
   const varBudget = manual ? round(Number(settings.varLimit)) : income > 0 ? Math.max(0, autoLimit) : 0;
   const limitMode = manual ? 'manual' : income > 0 ? 'auto' : 'none';
 
-  let varProjected = varSpent;
-  if (isCurrent && elapsed > 0) {
-    varProjected = varBudget > 0
-      ? round(Math.max(varSpent / elapsed, varSpent + Math.max(0, varBudget - varSpent) * (1 - elapsed)))
-      : round(varSpent / elapsed);
-  }
-  const varLeft = round(Math.max(0, varBudget - varSpent));
+  // compromissos do cartão (parcelas e assinaturas) saem do limite de início; o resto é o livre do dia a dia
+  const committed = commits.total;
+  const freeBudget = varBudget > 0 ? round(Math.max(0, varBudget - committed)) : 0;
+  const freeSpent = round(varSpent - commits.actualTotal);
 
-  // gasto variável acumulado dia a dia (gráfico do painel), comparado com a soma dos tetos
-  const cumulative = [];
-  let acc = 0;
+  // projeção: compromissos + o dia a dia no ritmo dele. Na 1ª semana o ritmo ainda não diz nada: usa o plano.
+  let varProjected = varSpent;
+  if (isCurrent) {
+    const pace = elapsedDays >= 7 ? freeSpent / elapsedDays * totalDays : Math.max(freeSpent, freeBudget || freeSpent / Math.max(1, elapsedDays) * totalDays);
+    varProjected = round(committed + Math.max(freeSpent, pace));
+  } else if (!isPast) varProjected = round(committed + freeBudget);
+  const planProjected = round(committed + Math.max(freeSpent, freeBudget));   // se seguir as semanas
+  const varLeft = round(Math.max(0, freeBudget - freeSpent));
+
+  // gasto variável acumulado dia a dia (gráfico do painel), comparado com o limite
+  const cumulative = [], cumFree = [];
+  let acc = 0, accF = 0;
   for (let i = 0; i < totalDays; i++) {
     const d = addDays(cycle.start, i);
-    acc += counted.filter(t => t.date === d).reduce((s, t) => s + Number(t.amount), 0);
+    for (const t of counted) if (t.date === d) { acc += Number(t.amount); if (!t.commit) accF += Number(t.amount); }
     cumulative.push({ date: d, value: round(acc), future: d > today });
+    cumFree.push({ date: d, value: round(accF), future: d > today });
   }
   const overDay = cumulative.find(p => varBudget > 0 && p.value > varBudget);
-  const weeks = weekPlan({ cycle, today, varBudget, cumulative });
+  const weeks = weekPlan({ cycle, today, varBudget: freeBudget, cumulative: cumFree });
 
   const bySource = {};
   for (const t of counted) bySource[t.source || 'nubank'] = round((bySource[t.source || 'nubank'] || 0) + Number(t.amount));
@@ -646,9 +658,60 @@ export function summarize({ txs, rules, settings, cycle, today, incomes = [], av
     cumulative, overDay, bySource, topMerchants, weeks, week: weeks.find(w => w.status === 'now') || null,
     // quanto ainda cabe por dia nas rubricas variáveis (o que estourou não "empresta" das outras)
     limitMode, autoLimit,
+    commits, committed, freeBudget, freeSpent, planProjected,
     varLeft,
     perDay: isCurrent && varBudget > 0 ? round(varLeft / Math.max(1, daysLeft)) : null,
   };
+}
+
+// Compromissos do cartão num ciclo: parcelas (da 2ª em diante: a 1ª é a compra, decidida naquela semana)
+// e assinaturas (mesma loja, uma vez por ciclo, valor parecido em pelo menos 2 dos 3 ciclos anteriores).
+// Eles já estavam decididos antes do ciclo começar, então saem do limite logo de início e não pesam na semana.
+const parcOf = t => { const m = String(t.title || '').match(PARC_RE); return m ? { k: +m[1], n: +m[2], base: normalize(String(t.title).replace(PARC_RE, '')) } : null; };
+function recurringIn(txs, rules, settings, cycle) {
+  const closing = primaryCard(settings).closing || 1;
+  const cards = new Set(settings.cards.map(c => c.id));
+  const cardTx = c => txs.filter(t => t.date >= c.start && t.date <= c.end && Number(t.amount) > 0 && cards.has(t.source || 'nubank') && categoryOf(t, rules) !== IGNORE);
+  const keyOf = t => merchantOf(t, rules).key;
+  const byKey = list => { const m = {}; for (const t of list) if (!parcOf(t)) (m[keyOf(t)] ||= []).push(t); return m; };
+  const cur = cardTx(cycle);
+  const curBy = byKey(cur);
+  const prevBy = [1, 2, 3].map(i => byKey(cardTx(shiftCycle(cycle.start, -i, closing))));
+  const kind = new Map();
+  for (const t of cur) {
+    const p = parcOf(t);
+    if (p) { if (p.k >= 2) kind.set(txKey(t), 'parcela'); continue; }
+    const k = keyOf(t);
+    if (curBy[k].length !== 1) continue;
+    const near = x => Math.abs(Number(x.amount) - Number(t.amount)) <= Math.max(2, Number(t.amount) * 0.15);
+    const hits = prevBy.filter(m => m[k] && m[k].length <= 2 && m[k].some(near)).length;
+    if (hits >= 2) kind.set(txKey(t), 'assinatura');
+  }
+  return { cur, curBy, kind, keyOf };
+}
+export function cardCommitments({ txs, rules, settings, cycle, today }) {
+  const now = recurringIn(txs, rules, settings, cycle);
+  const actual = now.cur.filter(t => now.kind.has(txKey(t))).map(t => ({ title: t.title, amount: round(Number(t.amount)), kind: now.kind.get(txKey(t)), date: t.date, key: txKey(t) }));
+  const pending = [];
+  if (today <= cycle.end) {
+    // o que veio no ciclo anterior e ainda deve vir neste
+    const prevC = shiftCycle(cycle.start, -1, primaryCard(settings).closing || 1);
+    const prev = recurringIn(txs, rules, settings, prevC);
+    for (const t of prev.cur) {
+      const kd = prev.kind.get(txKey(t)) || (parcOf(t) && parcOf(t).k === 1 && parcOf(t).n > 1 ? 'parcela' : null);
+      if (!kd) continue;
+      const p = parcOf(t);
+      if (p) {
+        if (p.k >= p.n) continue;
+        const came = now.cur.some(x => { const q = parcOf(x); return q && q.base === p.base && q.k === p.k + 1; });
+        if (!came) pending.push({ title: String(t.title).replace(PARC_RE, '') + ` - Parcela ${p.k + 1}/${p.n}`, amount: round(Number(t.amount)), kind: 'parcela', pending: true });
+      } else if (!now.curBy[prev.keyOf(t)]) {
+        pending.push({ title: t.title, amount: round(Number(t.amount)), kind: 'assinatura', pending: true });
+      }
+    }
+  }
+  const sum = l => round(l.reduce((a, x) => a + x.amount, 0));
+  return { actual, pending, kinds: now.kind, actualTotal: sum(actual), pendingTotal: sum(pending), total: round(sum(actual) + sum(pending)) };
 }
 
 // Semanas de segunda a domingo dentro do ciclo (as das pontas ficam incompletas).
@@ -681,7 +744,7 @@ export function weekPlan({ cycle, today, varBudget, cumulative }) {
     if (status === 'next' && futureRate != null) limit = round(futureRate * w.days);
     else if (status === 'next') { futureRate = Math.max(0, varBudget - before(w.start)) / (daysBetween(w.start, cycle.end) + 1); limit = round(futureRate * w.days); }
     else limit = round(Math.max(0, varBudget - before(w.start)) * w.days / (daysBetween(w.start, cycle.end) + 1));
-    const spent = status === 'next' ? 0 : round(cumAt(w.end) - before(w.start));
+    const spent = status === 'next' ? 0 : round(cumAt(w.end < today ? w.end : today) - before(w.start));
     const row = { ...w, status, limit, spent, left: round(limit - spent), days7: [] };
     for (let i = 0; i < w.days; i++) { const d = addDays(w.start, i); row.days7.push({ date: d, value: d > today ? 0 : daily(d), future: d > today }); }
     if (status === 'now') {
@@ -706,7 +769,7 @@ export function averageByCategory({ txs, rules, settings, incomes, today, cycles
   }
   const out = {};
   for (const cat of settings.categories || []) {
-    const vals = used.map(s => (s.rows.find(r => r.name === cat.name) || { varSpent: 0 }).varSpent);
+    const vals = used.map(s => (s.rows.find(r => r.name === cat.name) || { freeSpent: 0 }).freeSpent);
     out[cat.name] = vals.length ? round(vals.reduce((a, b) => a + b, 0) / vals.length) : 0;
   }
   return { cycles: used.map(s => s.cycle), avg: out };

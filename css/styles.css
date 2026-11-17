@@ -448,3 +448,14 @@ details.oncard > summary::after { content: '›'; color: var(--muted); font-size
 .ev .a { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
 .ev .a .pill { font-size: 11.5px; }
 .weekbars .wb i.hi, :root .weekbars .wb i.hi { background: #E59A1B !important; }
+.splitlim { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px; }
+.splitlim > div { display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; border-radius: 12px; background: var(--raise); }
+.splitlim small { font-size: 12px; color: var(--muted); } .splitlim b { font-size: 16px; font-variant-numeric: tabular-nums; }
+details.more { margin-top: 12px; } details.more > summary { cursor: pointer; font-size: 14px; font-weight: 600; padding: 6px 0; }
+.card.review .rv-top { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.card.review .rv-top > span { display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; border-radius: 12px; background: var(--raise); }
+.card.review .rv-top small { font-size: 12px; color: var(--muted); } .card.review .rv-top b { font-size: 16px; font-variant-numeric: tabular-nums; }
+.rv-list > div { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 9px 0; border-top: 1px solid var(--line-soft); font-size: 14px; }
+.rv-list > div > span { display: flex; flex-direction: column; min-width: 0; } .rv-list small { font-size: 12px; color: var(--muted); } .rv-list b { white-space: nowrap; }
+[hidden] { display: none !important; }
+.card.review .card-head { flex-wrap: nowrap; align-items: flex-start; } .card.review .card-head h2 { flex: 1 1 auto; min-width: 0; }
