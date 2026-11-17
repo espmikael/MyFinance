@@ -400,3 +400,51 @@ button.row:hover { background: var(--raise); }
 .sheet-x { position: absolute; top: 12px; right: 12px; width: 36px; height: 36px; border-radius: 10px; border: 1px solid var(--line); background: var(--surface); color: var(--text); display: flex; align-items: center; justify-content: center; z-index: 2; }
 .sheet h2, .sheet .head { padding-right: 44px; }
 body.noscroll { overflow: hidden; }
+
+/* ---- v3: semana liberada, Mês, Análise ---- */
+.verdict.warn { background: var(--warn-soft); border: 1px solid var(--warn-line); } .verdict.warn .ic { background: var(--warn-fill); } .verdict.warn b { color: var(--warn); }
+.kcard.hero.week { gap: 10px; }
+.kcard.hero .r1 { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.kcard.hero .ks b { font-weight: 700; }
+.weekbars { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 5px; margin-top: 2px; }
+.weekbars .wd { display: flex; flex-direction: column; align-items: center; gap: 5px; }
+.weekbars .wb { width: 100%; height: 44px; border-radius: 7px; background: rgba(255, 255, 255, .18); display: flex; align-items: flex-end; overflow: hidden; }
+.weekbars .wb i { display: block; width: 100%; background: rgba(255, 255, 255, .95); }
+.weekbars .wb i.hi { background: #FFD38A; }
+.weekbars small { font-size: 11.5px; opacity: .8; } .weekbars .today small { opacity: 1; font-weight: 700; }
+.kcard.hero.zero .weekbars .wb { background: var(--over-line); } .kcard.hero.zero .weekbars .wb i { background: var(--over-fill); }
+:root[data-theme="dark"] .weekbars .wb { background: rgba(0, 0, 0, .18); } :root[data-theme="dark"] .weekbars .wb i { background: rgba(0, 0, 0, .7); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .weekbars .wb { background: rgba(0, 0, 0, .18); } :root:not([data-theme="light"]) .weekbars .wb i { background: rgba(0, 0, 0, .7); } }
+.wfoot { display: flex; flex-direction: column; gap: 6px; padding-top: 10px; border-top: 1px solid rgba(255, 255, 255, .25); font-size: 13px; }
+.wfoot > span { display: flex; justify-content: space-between; gap: 8px; } .wfoot > span > span { opacity: .9; }
+button.kcard { font: inherit; color: inherit; text-align: left; cursor: pointer; }
+.flows { display: flex; flex-direction: column; gap: 8px; }
+.flow { display: grid; grid-template-columns: 118px minmax(0, 1fr) auto; align-items: center; gap: 10px; font-size: 13.5px; }
+.flow > span:first-child { color: var(--text-2); }
+.flow .fb { position: relative; height: 12px; border-radius: 4px; background: var(--raise); }
+.flow .fb i { position: absolute; top: 0; bottom: 0; border-radius: 4px; }
+.flow b { font-variant-numeric: tabular-nums; white-space: nowrap; text-align: right; min-width: 92px; }
+.limbox { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 14px; padding: 12px 14px; border-radius: 14px; background: var(--brand-soft); border: 1px solid var(--brand-line); }
+.limbox > span { display: flex; flex-direction: column; gap: 2px; min-width: 0; } .limbox small { font-size: 12px; color: var(--text-2); line-height: 1.4; }
+.ktag { font-size: 10px; font-weight: 700; letter-spacing: .03em; padding: 2px 6px; border-radius: 6px; background: var(--raise); color: var(--muted); vertical-align: 2px; margin-left: 4px; }
+.ktag.ex { background: var(--brand-soft); color: var(--brand-text); }
+.lrow .m.linkish { background: none; border: 0; padding: 0; text-align: left; color: inherit; font: inherit; cursor: pointer; }
+.lrow .m.linkish:hover b { text-decoration: underline; text-underline-offset: 3px; }
+.lrow .r b.muted { color: var(--muted); }
+details.oncard { margin-top: 6px; border-top: 1px solid var(--line-soft); }
+details.oncard > summary { list-style: none; display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 12px 0; cursor: pointer; }
+details.oncard > summary::-webkit-details-marker { display: none; }
+details.oncard > summary > span { display: flex; flex-direction: column; gap: 2px; } details.oncard > summary small { font-size: 12px; color: var(--muted); }
+details.oncard > summary > b { color: var(--muted); white-space: nowrap; }
+details.oncard > summary::after { content: '›'; color: var(--muted); font-size: 18px; transition: transform .15s; } details.oncard[open] > summary::after { transform: rotate(90deg); }
+.weeks { display: flex; flex-direction: column; }
+.wkrow { padding: 10px 0; border-top: 1px solid var(--line-soft); display: flex; flex-direction: column; gap: 6px; }
+.wkrow .lab { display: flex; justify-content: space-between; gap: 8px; font-size: 13.5px; } .wkrow .lab > span:last-child { font-weight: 600; white-space: nowrap; }
+.wkrow .trk { position: relative; height: 14px; border-radius: 4px; background: var(--raise); }
+.wkrow .trk i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 4px; background: var(--brand); } .wkrow .trk i.over { background: var(--over-fill); }
+.wkrow .trk .tick { position: absolute; top: -3px; bottom: -3px; width: 2px; background: var(--text); }
+.wkrow.next .trk { background: repeating-linear-gradient(45deg, var(--raise) 0 6px, var(--line-soft) 6px 12px); }
+.kgrid { align-items: start; }
+.ev .a { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+.ev .a .pill { font-size: 11.5px; }
+.weekbars .wb i.hi, :root .weekbars .wb i.hi { background: #E59A1B !important; }

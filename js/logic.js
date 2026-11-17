@@ -597,6 +597,7 @@ export function summarize({ txs, rules, settings, cycle, today, incomes = [], av
     cumulative.push({ date: d, value: round(acc), future: d > today });
   }
   const overDay = cumulative.find(p => varBudget > 0 && p.value > varBudget);
+  const weeks = weekPlan({ cycle, today, varBudget, cumulative });
 
   const bySource = {};
   for (const t of counted) bySource[t.source || 'nubank'] = round((bySource[t.source || 'nubank'] || 0) + Number(t.amount));
@@ -622,12 +623,56 @@ export function summarize({ txs, rules, settings, cycle, today, incomes = [], av
     result: round(income - fixedCost - varSpent),
     overBudget: round(varSpent - varBudget),               // só a parte variável: fixo não "estoura teto"
     toClassify, unclassifiedTotal, txs: inCycle,
-    cumulative, overDay, bySource, topMerchants,
+    cumulative, overDay, bySource, topMerchants, weeks, week: weeks.find(w => w.status === 'now') || null,
     // quanto ainda cabe por dia nas rubricas variáveis (o que estourou não "empresta" das outras)
     limitMode, autoLimit,
     varLeft,
     perDay: isCurrent && varBudget > 0 ? round(varLeft / Math.max(1, daysLeft)) : null,
   };
+}
+
+// Semanas de segunda a domingo dentro do ciclo (as das pontas ficam incompletas).
+export function cycleWeeks(cycle) {
+  const out = [];
+  for (let d = cycle.start; d <= cycle.end;) {
+    const dow = (new Date(parseISO(d)).getUTCDay() + 6) % 7;       // 0 = segunda
+    let e = addDays(d, 6 - dow);
+    if (e > cycle.end) e = cycle.end;
+    out.push({ start: d, end: e, days: daysBetween(d, e) + 1 });
+    d = addDays(e, 1);
+  }
+  return out;
+}
+
+// Quanto cada semana libera: no início de cada semana, o que resta do limite é dividido pelos dias
+// que faltam no ciclo. O que uma semana passa sai das seguintes; o que sobra, vai para elas.
+// As semanas futuras assumem que a atual gasta o liberado (ou o que já gastou, se passou).
+export function weekPlan({ cycle, today, varBudget, cumulative }) {
+  const ws = cycleWeeks(cycle);
+  if (!(varBudget > 0)) return ws.map(w => ({ ...w, limit: null, spent: 0, status: w.end < today ? 'past' : w.start > today ? 'next' : 'now' }));
+  const cumAt = d => { let v = 0; for (const p of cumulative) { if (p.date > d) break; v = p.value; } return v; };
+  const before = d => (d <= cycle.start ? 0 : cumAt(addDays(d, -1)));
+  const daily = d => round(cumAt(d) - before(d));
+  let futureRate = null;
+  const out = [];
+  for (const w of ws) {
+    const status = w.end < today ? 'past' : w.start > today ? 'next' : 'now';
+    let limit;
+    if (status === 'next' && futureRate != null) limit = round(futureRate * w.days);
+    else if (status === 'next') { futureRate = Math.max(0, varBudget - before(w.start)) / (daysBetween(w.start, cycle.end) + 1); limit = round(futureRate * w.days); }
+    else limit = round(Math.max(0, varBudget - before(w.start)) * w.days / (daysBetween(w.start, cycle.end) + 1));
+    const spent = status === 'next' ? 0 : round(cumAt(w.end) - before(w.start));
+    const row = { ...w, status, limit, spent, left: round(limit - spent), days7: [] };
+    for (let i = 0; i < w.days; i++) { const d = addDays(w.start, i); row.days7.push({ date: d, value: d > today ? 0 : daily(d), future: d > today }); }
+    if (status === 'now') {
+      row.daysLeft = daysBetween(today, w.end) + 1;
+      row.perDay = round(Math.max(0, row.left) / row.daysLeft);
+      const after = daysBetween(w.end, cycle.end);
+      futureRate = after > 0 ? Math.max(0, varBudget - before(w.start) - Math.max(limit, spent)) / after : 0;
+    }
+    out.push(row);
+  }
+  return out;
 }
 
 // Média do gasto variável por rubrica nos últimos ciclos fechados que têm compras.
@@ -835,7 +880,7 @@ export function moneyAgenda({ settings, txs, rules, incomes, today, days = 35, p
       const date = `${ym}-${String(Math.min(b.day, last)).padStart(2, '0')}`;
       if (!inWin(date) || matched.find(f => f.index === b.index && f.paid)) continue;
       const p = b.parcel ? ` · parcela ${b.parcel.n} de ${b.parcel.total}` : '';
-      ev.push({ date, kind: 'out', title: b.name, sub: (b.kind === 'estimate' ? 'conta estimada' : 'conta') + p, amount: -b.value });
+      ev.push({ date, kind: 'out', title: b.name, sub: (b.kind === 'estimate' ? 'conta estimada' : 'conta') + p, amount: -b.value, bill: { index: b.index, ym } });
     }
   }
   // faturas dos cartões
