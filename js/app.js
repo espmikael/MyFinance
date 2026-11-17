@@ -61,10 +61,19 @@ async function boot() {
     return;
   }
   sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, { auth: { persistSession: true, autoRefreshToken: true } });
+  // link do e-mail de recuperação: o Supabase devolve type=recovery (ou um erro, se o link venceu)
+  const urlInfo = new URLSearchParams((location.hash || '').replace(/^#/, '') + '&' + location.search.replace(/^\?/, ''));
+  const isRecovery = urlInfo.get('type') === 'recovery';
+  const linkError = urlInfo.get('error_description');
   const { data } = await sb.auth.getSession();
-  if (data.session) await enter(data.session.user);
+  if (linkError) { history.replaceState(null, '', location.pathname); renderLogin(linkError.includes('expired') ? 'O link venceu ou já foi usado. Peça um novo em "Esqueci a senha".' : linkError); }
+  else if (isRecovery && data.session) renderNewPassword();
+  else if (data.session) await enter(data.session.user);
   else renderLogin();
-  sb.auth.onAuthStateChange(event => { if (event === 'SIGNED_OUT') { state.user = null; renderLogin(); } });
+  sb.auth.onAuthStateChange(event => {
+    if (event === 'SIGNED_OUT') { state.user = null; renderLogin(); }
+    if (event === 'PASSWORD_RECOVERY') renderNewPassword();
+  });
 }
 
 async function enter(user) {
@@ -1679,30 +1688,62 @@ function billSheet(index, ym, kindDefault = 'exact') {
 }
 
 // ---------------- login ----------------
-function renderLogin() {
+function renderLogin(msg = '') {
   $app.innerHTML = `<div class="center"><form class="login" id="login">
-    <span class="brand">MyFinance</span>
+    <span class="brand"><span class="logo">${icon('bars', 18, 2.2)}</span>MyFinance</span>
     <p>Entre para ver suas faturas.</p>
     <div class="field"><label for="email">E-mail</label><input class="input" id="email" type="email" autocomplete="email" required></div>
-    <div class="field"><label for="pass">Senha</label><input class="input" id="pass" type="password" autocomplete="current-password" minlength="6" required></div>
-    <div class="err" id="lerr"></div>
-    <div class="actions"><button class="btn primary" type="submit">Entrar</button><button class="btn ghost" type="button" id="signup">Criar conta</button></div>
+    <div class="field"><label for="pass">Senha</label><input class="input" id="pass" type="password" autocomplete="current-password" required></div>
+    <div class="err" id="lerr" role="alert"></div>
+    <p class="help small" id="lok" role="status"></p>
+    <div class="actions"><button class="btn primary grow" type="submit">Entrar</button></div>
+    <div class="actions" style="margin-top:8px"><button class="btn ghost small" type="button" id="forgot">Esqueci a senha</button></div>
   </form></div>`;
-  const $err = document.getElementById('lerr');
-  const creds = () => ({ email: document.getElementById('email').value.trim(), password: document.getElementById('pass').value });
+  const $err = document.getElementById('lerr'), $ok = document.getElementById('lok');
+  $err.textContent = msg;
+  const email = () => document.getElementById('email').value.trim();
   document.getElementById('login').onsubmit = async e => {
-    e.preventDefault(); $err.textContent = '';
-    const { data, error } = await sb.auth.signInWithPassword(creds());
-    if (error) { $err.textContent = error.message === 'Invalid login credentials' ? 'E-mail ou senha incorretos.' : error.message; return; }
+    e.preventDefault(); $err.textContent = ''; $ok.textContent = '';
+    const { data, error } = await sb.auth.signInWithPassword({ email: email(), password: document.getElementById('pass').value });
+    if (error) {
+      const m = error.message || '';
+      $err.textContent = /invalid login credentials/i.test(m) ? 'E-mail ou senha incorretos. Se não lembrar a senha, use "Esqueci a senha".'
+        : /email not confirmed/i.test(m) ? 'Este e-mail ainda não foi confirmado. Procure o link de confirmação na sua caixa de entrada.'
+        : /fetch|network/i.test(m) ? 'Sem conexão com o servidor. Confira a internet e tente de novo.' : m;
+      return;
+    }
     await enter(data.user);
   };
-  document.getElementById('signup').onclick = async () => {
-    $err.textContent = '';
-    const c = creds();
-    if (!c.email || c.password.length < 6) { $err.textContent = 'Preencha o e-mail e uma senha com pelo menos 6 caracteres.'; return; }
-    const { data, error } = await sb.auth.signUp(c);
-    if (error) { $err.textContent = error.message; return; }
-    if (data.session) await enter(data.user);
-    else $err.textContent = 'Conta criada. Confirme pelo link no seu e-mail e depois entre aqui.';
+  document.getElementById('forgot').onclick = async () => {
+    $err.textContent = ''; $ok.textContent = '';
+    if (!email()) { $err.textContent = 'Escreva seu e-mail no campo acima e toque de novo em "Esqueci a senha".'; return; }
+    const { error } = await sb.auth.resetPasswordForEmail(email(), { redirectTo: location.origin + location.pathname });
+    if (error) { $err.textContent = /rate|seconds/i.test(error.message) ? 'Já enviamos um link há pouco. Espere um minuto e tente de novo.' : error.message; return; }
+    $ok.textContent = 'Se o e-mail estiver cadastrado, chega em instantes um link para criar uma senha nova. Abra o link neste mesmo aparelho.';
+  };
+}
+
+// tela de senha nova, aberta pelo link do e-mail de recuperação
+function renderNewPassword() {
+  $app.innerHTML = `<div class="center"><form class="login" id="newpass">
+    <span class="brand"><span class="logo">${icon('bars', 18, 2.2)}</span>MyFinance</span>
+    <p>Crie uma senha nova.</p>
+    <div class="field"><label for="np1">Senha nova</label><input class="input" id="np1" type="password" autocomplete="new-password" minlength="8" required></div>
+    <div class="field"><label for="np2">Repita a senha</label><input class="input" id="np2" type="password" autocomplete="new-password" minlength="8" required></div>
+    <p class="help small">Pelo menos 8 caracteres. Use uma senha que você não usa em nenhum outro lugar.</p>
+    <div class="err" id="nperr" role="alert"></div>
+    <div class="actions"><button class="btn primary grow" type="submit">Salvar senha e entrar</button></div>
+  </form></div>`;
+  const $err = document.getElementById('nperr');
+  document.getElementById('newpass').onsubmit = async e => {
+    e.preventDefault(); $err.textContent = '';
+    const a = document.getElementById('np1').value, b = document.getElementById('np2').value;
+    if (a.length < 8) { $err.textContent = 'A senha precisa ter pelo menos 8 caracteres.'; return; }
+    if (a !== b) { $err.textContent = 'As duas senhas não são iguais.'; return; }
+    const { data, error } = await sb.auth.updateUser({ password: a });
+    if (error) { $err.textContent = /session/i.test(error.message) ? 'O link venceu. Volte e peça outro em "Esqueci a senha".' : error.message; return; }
+    history.replaceState(null, '', location.pathname);
+    toast('Senha alterada.');
+    await enter(data.user);
   };
 }
