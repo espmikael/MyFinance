@@ -331,6 +331,26 @@ export function findSuspects(rows, fresh, existing, source) {
   return { suspects, otherSource: top ? { id: top[0], count: top[1] } : null };
 }
 
+// Compras no cartão lançadas à mão durante a semana que a fatura agora traz de verdade.
+// Mesmo cartão, mesmo valor, até 3 dias de diferença; cada lançamento à mão casa com uma linha só.
+// A linha da fatura fica (descrição e data reais) e o lançamento à mão sai, levando a rubrica escolhida.
+export function matchManual(fresh, existing, source) {
+  const pool = existing.filter(t => t.manual && (t.source || 'nubank') === source);
+  const parc = title => (String(title).match(PARC_RE) || []).slice(1, 3).join('/');
+  const pairs = [];
+  for (const r of fresh) {
+    let best = -1, bestGap = 99;
+    pool.forEach((t, i) => {
+      if (Math.abs(Number(t.amount) - Number(r.amount)) >= 0.005) return;
+      if (parc(t.title) !== parc(r.title)) return;
+      const gap = Math.abs(daysBetween(t.date, r.date));
+      if (gap <= 3 && gap < bestGap) { best = i; bestGap = gap; }
+    });
+    if (best >= 0) { pairs.push({ row: r, manual: pool[best] }); pool.splice(best, 1); }
+  }
+  return pairs;
+}
+
 // ---------- categorias ----------
 export function matchRule(title, rules) {
   const t = normalize(title);

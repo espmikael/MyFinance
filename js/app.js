@@ -1,5 +1,5 @@
-import * as L from './logic.js?v=20261117f';
-import { SUPABASE_URL, SUPABASE_ANON_KEY } from './config.js?v=20261117f';
+import * as L from './logic.js?v=20261117g';
+import { SUPABASE_URL, SUPABASE_ANON_KEY } from './config.js?v=20261117g';
 
 const $app = document.getElementById('app');
 const $toast = document.getElementById('toast');
@@ -796,12 +796,16 @@ function weeksCard(s) {
 function viewAnalise(s) {
   const prev = summary(L.shiftCycle(s.cycle.start, -1, card().closing || 1));
   const prevTotal = prev.varSpent;
-  const diff = prevTotal > 0 ? (s.varSpent - prevTotal) / prevTotal : null;
+  // no ciclo atual, compara com o anterior no mesmo dia do ciclo (não com o ciclo inteiro)
+  const day = s.isCurrent ? L.daysBetween(s.cycle.start, today()) : null;
+  const prevSame = day != null ? ((prev.cumulative[Math.min(day, prev.cumulative.length - 1)] || {}).value || 0) : prevTotal;
+  const diff = prevSame > 0 ? (s.varSpent - prevSame) / prevSame : null;
   const kpis = [
     ['Gasto no ciclo', money(s.varSpent), 'sem os fixos'],
     s.varBudget > 0 ? [s.overBudget > 0 ? 'Acima do limite' : 'Abaixo do limite', money(Math.abs(s.overBudget)), `limite ${money(s.varBudget)}`, s.overBudget > 0 ? 'neg' : ''] : ['Limite do variável', '—', 'informe as entradas'],
     s.isCurrent ? ['Projeção até fechar', money(s.varProjected), s.week && s.week.limit != null ? `nesta semana ${s.week.left >= 0 ? 'restam' : 'passou'} ${money(Math.abs(s.week.left))}` : 'no ritmo atual'] : ['Média por dia', money(s.varSpent / s.totalDays), `${s.totalDays} dias de ciclo`],
-    ['Ciclo anterior', prevTotal > 0 ? money(prevTotal) : '—', diff != null && s.varSpent > 0 ? `este ciclo: ${diff >= 0 ? '+' : '−'}${pct(Math.abs(diff))}` : prevTotal > 0 ? 'fatura passada' : 'sem dados'],
+    s.isCurrent ? ['Ciclo anterior até o dia ' + (day + 1), prevSame > 0 ? money(prevSame) : '—', diff != null && s.varSpent > 0 ? `este ciclo: ${diff >= 0 ? '+' : '−'}${pct(Math.abs(diff))} · fechou em ${money(prevTotal)}` : 'sem dados']
+      : ['Ciclo anterior', prevTotal > 0 ? money(prevTotal) : '—', diff != null && s.varSpent > 0 ? `este ciclo: ${diff >= 0 ? '+' : '−'}${pct(Math.abs(diff))}` : prevTotal > 0 ? 'fatura passada' : 'sem dados'],
   ];
 
   // referência de cada rubrica: o teto (se houver) ou a média do ciclo inteiro, mais as contas dela
@@ -1343,7 +1347,7 @@ function pickFile() {
     if (f.size > 15e6) return toast('Arquivo grande demais para uma fatura.');
     let text;
     try {
-      if (/\.xlsx$/i.test(f.name)) { const X = await import('./xlsx.js?v=20261117f'); text = await X.xlsxToCSV(await f.arrayBuffer()); }
+      if (/\.xlsx$/i.test(f.name)) { const X = await import('./xlsx.js?v=20261117g'); text = await X.xlsxToCSV(await f.arrayBuffer()); }
       else if (/\.xls$/i.test(f.name)) return toast('Arquivo .xls antigo: abra no Excel e salve como .xlsx ou CSV.');
       else text = await f.text();
     } catch (err) { return toast('Não consegui ler o arquivo: ' + (err.message || err)); }
@@ -1373,18 +1377,20 @@ function uploadSheet(fileName, parsed) {
     <div class="actions"><button class="btn primary grow" data-go disabled>Escolha o cartão</button><button class="btn ghost" data-close>Cancelar</button></div>`;
 
   openSheet(html, (sh, close) => {
-    let fresh = [], toAdd = [], forceSuspects = false;
+    let fresh = [], toAdd = [], forceSuspects = false, pairs = [];
     const update = () => {
       if (!chosen) { sh.$('[data-sum]').innerHTML = `<div><span>Compras na fatura</span><b>${parsed.rows.length}</b></div>`; return; }
       const rows = L.fingerprint(parsed.rows, chosen);
       fresh = rows.filter(r => !known.has(r.uid));
       const { suspects, otherSource } = L.findSuspects(rows, fresh, state.txs, chosen);
       toAdd = forceSuspects ? fresh : fresh.filter(r => !suspects.has(r.uid));
+      pairs = L.matchManual(toAdd, state.txs, chosen);
       const unc = toAdd.filter(r => !L.matchRule(r.title, state.rules)).length;
       const wrongCard = otherSource && otherSource.count >= Math.max(3, rows.length * 0.5);
       sh.$('[data-sum]').innerHTML = `<div><span>Compras novas</span><b>${toAdd.length}</b></div>
         <div><span>Já estavam no app</span><span>${rows.length - fresh.length}</span></div>
         ${suspects.size ? `<div><span>Parecem repetidas (descrição ou valor mudou)</span><span>${suspects.size}</span></div>` : ''}
+        ${pairs.length ? `<div><span>Lançadas à mão que a fatura confirmou (a da fatura substitui a sua)</span><span>${pairs.length}</span></div>` : ''}
         <div><span>Sem categoria</span><span>${unc}</span></div>
         ${suspects.size ? `<label class="check" style="margin-top:6px"><input type="checkbox" data-force ${forceSuspects ? 'checked' : ''}> Adicionar as que parecem repetidas mesmo assim</label>` : ''}
         ${wrongCard ? `<div style="color:var(--over)">Essas compras já estão no app como ${esc(sourceName(otherSource.id))}. Confira o cartão escolhido.</div>` : ''}`;
@@ -1398,10 +1404,17 @@ function uploadSheet(fileName, parsed) {
     sh.$('[data-go]').addEventListener('click', async () => {
       const go = sh.$('[data-go]'); go.disabled = true; go.textContent = 'Enviando…';
       fresh = toAdd;
+      const keepCat = new Map(pairs.filter(p => p.manual.category).map(p => [p.row.uid, p.manual.category]));
       for (let i = 0; i < fresh.length; i += 500) {
-        const chunk = fresh.slice(i, i + 500).map(r => ({ ...r, user_id: state.user.id, manual: false }));
+        const chunk = fresh.slice(i, i + 500).map(r => ({ ...r, user_id: state.user.id, manual: false, ...(keepCat.has(r.uid) && !r.category ? { category: keepCat.get(r.uid) } : {}) }));
         const { error } = await sb.from('transactions').upsert(chunk, { onConflict: 'user_id,uid', ignoreDuplicates: true });
         if (error) { toast('Não enviou: ' + error.message); go.disabled = false; update(); return; }
+      }
+      // os lançamentos à mão que a fatura confirmou saem (a linha da fatura já entrou no lugar)
+      const manualIds = pairs.map(p => p.manual.id).filter(Boolean);
+      if (manualIds.length) {
+        const { error } = await sb.from('transactions').delete().in('id', manualIds).eq('manual', true);
+        if (error) toast('As compras entraram, mas não consegui tirar os lançamentos à mão repetidos: ' + error.message);
       }
       await loadTxs();
       const latest = fresh.reduce((m, r) => (r.date > m ? r.date : m), fresh[0].date);
@@ -1411,7 +1424,7 @@ function uploadSheet(fileName, parsed) {
       state.lastBatch = b ? b.key : null;
       close();
       if (state.view !== 'home') go('home'); else render();
-      toast(`${fresh.length} ${fresh.length === 1 ? 'compra adicionada' : 'compras adicionadas'}.`);
+      toast(`${fresh.length} ${fresh.length === 1 ? 'compra adicionada' : 'compras adicionadas'}${manualIds.length ? ` · ${manualIds.length} ${manualIds.length === 1 ? 'lançamento à mão substituído' : 'lançamentos à mão substituídos'}` : ''}.`);
     });
     update();
   });
