@@ -1,5 +1,5 @@
-import * as L from './logic.js?v=20261117p';
-import { SUPABASE_URL, SUPABASE_ANON_KEY } from './config.js?v=20261117p';
+import * as L from './logic.js?v=20261117q';
+import { SUPABASE_URL, SUPABASE_ANON_KEY } from './config.js?v=20261117q';
 
 const $app = document.getElementById('app');
 const $toast = document.getElementById('toast');
@@ -52,6 +52,77 @@ const sourceName = id => (sources().find(s => s.id === id) || { name: id || 'Nub
 const sourceColor = id => (sources().find(s => s.id === id) || { color: '#8b8e92' }).color;
 const catNames = () => state.settings.categories.map(c => c.name);
 
+// ---------------- trava com Face ID (só neste aparelho) ----------------
+// Usa uma chave de acesso do próprio aparelho (WebAuthn) só para confirmar que é você: Face ID, Touch ID
+// ou o código do iPhone. Nada vai para o servidor; a senha da conta continua protegendo os dados.
+const b64u = buf => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+const unb64u = str => Uint8Array.from(atob(str.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((str.length + 3) % 4)), c => c.charCodeAt(0));
+const rnd = n => crypto.getRandomValues(new Uint8Array(n));
+function lockCfg() { try { return JSON.parse(localStorage.getItem('mf-lock') || 'null'); } catch (e) { return null; } }
+function setLockCfg(v) { try { v ? localStorage.setItem('mf-lock', JSON.stringify(v)) : localStorage.removeItem('mf-lock'); } catch (e) {} }
+const lockSupported = () => !!(window.PublicKeyCredential && navigator.credentials && window.isSecureContext);
+let hiddenAt = null, unlocking = false;
+function shouldLock() {
+  const c = lockCfg();
+  if (!c || !c.id) return false;
+  if (!state.unlockedAt) return true;
+  return hiddenAt != null && Date.now() - hiddenAt >= (Number(c.relock) || 0) * 60000;
+}
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) { if (!unlocking && !state.locked) hiddenAt = Date.now(); return; }
+  if (state.user && !state.locked && shouldLock()) { state.locked = true; render(); }
+  hiddenAt = null;
+});
+async function enableLock() {
+  if (!lockSupported()) return toast('Este navegador não oferece Face ID para sites.');
+  try {
+    unlocking = true;
+    const cred = await navigator.credentials.create({ publicKey: {
+      challenge: rnd(32), rp: { name: 'MyFinance', id: location.hostname },
+      user: { id: rnd(16), name: state.user.email || 'MyFinance', displayName: 'MyFinance' },
+      pubKeyCredParams: [{ type: 'public-key', alg: -7 }, { type: 'public-key', alg: -257 }],
+      authenticatorSelection: { authenticatorAttachment: 'platform', userVerification: 'required', residentKey: 'discouraged' },
+      timeout: 60000, attestation: 'none',
+    } });
+    setLockCfg({ id: b64u(cred.rawId), relock: 1 });
+    state.unlockedAt = Date.now();
+    render(); toast('Face ID ativado neste aparelho.');
+  } catch (e) { toast(e && e.name === 'NotAllowedError' ? 'Cancelado.' : 'Não consegui ativar: ' + (e.message || e)); }
+  finally { unlocking = false; }
+}
+async function unlockWithFaceId() {
+  const c = lockCfg(); if (!c) { state.locked = false; return render(); }
+  const msg = document.getElementById('lock-msg');
+  try {
+    unlocking = true;
+    await navigator.credentials.get({ publicKey: { challenge: rnd(32), rpId: location.hostname, allowCredentials: [{ type: 'public-key', id: unb64u(c.id), transports: ['internal'] }], userVerification: 'required', timeout: 60000 } });
+    state.locked = false; state.unlockedAt = Date.now(); hiddenAt = null; render();
+  } catch (e) { if (msg) msg.textContent = 'Não confirmou. Tente de novo ou entre com a senha.'; }
+  finally { unlocking = false; }
+}
+function renderLock() {
+  $app.innerHTML = `<div class="center"><div class="login lockscreen">
+    <span class="logo big" aria-hidden="true">${icon('bars', 26, 2.2)}</span>
+    <span class="brand">MyFinance</span>
+    <p class="help" style="text-align:center">Bloqueado neste aparelho.</p>
+    <button class="btn primary grow" data-lock="face">${icon('lock', 18)}Desbloquear com Face ID</button>
+    <p class="err" id="lock-msg" aria-live="polite"></p>
+    <form id="lock-pass" class="lockpass">
+      <label class="lbl" for="lp-pass">Ou entre com a senha da conta</label>
+      <input class="input" id="lp-pass" type="password" autocomplete="current-password" placeholder="senha">
+      <button class="btn" type="submit">Entrar com a senha</button>
+    </form>
+  </div></div>`;
+  $app.querySelector('[data-lock="face"]').addEventListener('click', unlockWithFaceId);
+  $app.querySelector('#lock-pass').addEventListener('submit', async e => {
+    e.preventDefault();
+    const msg = document.getElementById('lock-msg');
+    const { error } = await sb.auth.signInWithPassword({ email: state.user.email, password: document.getElementById('lp-pass').value });
+    if (error) { msg.textContent = 'Senha incorreta.'; return; }
+    state.locked = false; state.unlockedAt = Date.now(); hiddenAt = null; render();
+  });
+}
+
 // ---------------- início ----------------
 boot();
 
@@ -79,6 +150,7 @@ async function boot() {
 
 async function enter(user) {
   state.user = user;
+  if (shouldLock()) state.locked = true;
   $app.innerHTML = `<div class="center"><p class="help">Carregando…</p></div>`;
   try { await loadAll(); }
   catch (e) {
@@ -227,6 +299,7 @@ const ICON = {
   more: '<circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>',
   warn: '<path d="M12 9v4M12 17h.01M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/>',
   check: '<path d="M20 6L9 17l-5-5"/>',
+  lock: '<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
   x: '<path d="M18 6L6 18M6 6l12 12"/>',
   undo: '<path d="M3 7v6h6"/><path d="M3 13a9 9 0 1 0 3-7.7L3 8"/>',
   nfc: '<path d="M8.5 7.5a6 6 0 0 1 0 9M12 5a9.5 9.5 0 0 1 0 14M5 10a2.5 2.5 0 0 1 0 4"/>',
@@ -242,6 +315,7 @@ const ALIAS = { contas: 'mes', painel: 'analise' };
 
 function render() {
   if (!state.user) return renderLogin();
+  if (state.locked) return renderLock();
   const s = summary(state.view === 'home' ? curCycle() : state.cycle);
   const body = {
     home: () => viewHome(s), gastos: () => viewGastos(s), analise: () => viewAnalise(s), mes: viewMes,
@@ -1184,6 +1258,16 @@ function viewAjustes() {
         <span class="r"><button class="btn small danger" data-act="batch-undo" data-k="${esc(b.key)}">Desfazer</button></span></div>`).join('') || '<p class="help">Nenhum envio ainda.</p>'}
     </section>
     <section class="card">
+      <div class="card-head"><h2>Face ID neste aparelho</h2></div>
+      ${(() => { const c = lockCfg();
+        if (!lockSupported()) return '<p class="help">Este navegador não oferece Face ID para sites.</p>';
+        if (!c) return `<p class="help">Ao abrir o app, pede Face ID (ou o código do iPhone) antes de mostrar qualquer número. Fica só neste aparelho; se o Face ID falhar, dá para entrar com a senha da conta.</p>
+          <div class="actions"><button class="btn primary" data-act="lock-on">${icon('lock', 16)}Ativar Face ID</button></div>`;
+        return `<p class="help">Ativado. Pede Face ID ao abrir o app e ao voltar para ele depois de:</p>
+          <div class="seg" role="group" aria-label="Travar de novo depois de" style="max-width:420px">${[[0, 'na hora'], [1, '1 min'], [5, '5 min'], [15, '15 min']].map(([v, l]) => `<button data-act="lock-relock" data-v="${v}" aria-pressed="${Number(c.relock) === v}">${l}</button>`).join('')}</div>
+          <div class="actions"><button class="btn small" data-act="lock-now">Travar agora</button><button class="btn small ghost" data-act="lock-off">Desativar</button></div>`; })()}
+    </section>
+    <section class="card">
       <div class="card-head"><h2>Aparência</h2></div>
       <div class="seg" role="group" aria-label="Tema" style="max-width:360px">
         ${[['auto', 'Automático'], ['light', 'Claro'], ['dark', 'Escuro']].map(([v, l]) => `<button data-act="theme" data-t="${v}" aria-pressed="${theme === v}">${l}</button>`).join('')}
@@ -1319,6 +1403,10 @@ document.addEventListener('click', async e => {
     case 'home-card': state.homeCard = el.dataset.v; { const y = window.scrollY; render(); window.scrollTo(0, y); } return;
     case 'home-tab': state.homeTab = el.dataset.v; { const y = window.scrollY; render(); window.scrollTo(0, y); } return;
     case 'balance': return balanceSheet();
+    case 'lock-on': return enableLock();
+    case 'lock-off': setLockCfg(null); render(); return toast('Face ID desativado neste aparelho.');
+    case 'lock-relock': { const c = lockCfg(); if (c) { c.relock = Number(el.dataset.v); setLockCfg(c); } const y = window.scrollY; render(); window.scrollTo(0, y); return; }
+    case 'lock-now': state.locked = true; return render();
     case 'agenda-all': state.agendaAll = !state.agendaAll; { const y = window.scrollY; render(); window.scrollTo(0, y); } return;
     case 'week-dismiss': try { localStorage.setItem('mf-wk-' + el.dataset.w, '1'); } catch (e) {} { const y = window.scrollY; render(); window.scrollTo(0, y); } return;
     case 'contas-kind': state.contasKind = el.dataset.v; { const y = window.scrollY; render(); window.scrollTo(0, y); } return;
@@ -1534,7 +1622,7 @@ function pickFile() {
     if (f.size > 15e6) return toast('Arquivo grande demais para uma fatura.');
     let text;
     try {
-      if (/\.xlsx$/i.test(f.name)) { const X = await import('./xlsx.js?v=20261117p'); text = await X.xlsxToCSV(await f.arrayBuffer()); }
+      if (/\.xlsx$/i.test(f.name)) { const X = await import('./xlsx.js?v=20261117q'); text = await X.xlsxToCSV(await f.arrayBuffer()); }
       else if (/\.xls$/i.test(f.name)) return toast('Arquivo .xls antigo: abra no Excel e salve como .xlsx ou CSV.');
       else text = await f.text();
     } catch (err) { return toast('Não consegui ler o arquivo: ' + (err.message || err)); }
