@@ -522,3 +522,8 @@ button.slim .go { margin-left: auto; font-weight: 700; } button.slim .dot { widt
 .oneoff { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 12px 0 4px; padding: 12px 14px; border-radius: 14px; background: var(--raise); }
 .oneoff > span { display: flex; flex-direction: column; gap: 2px; min-width: 0; } .oneoff small { font-size: 12.5px; color: var(--muted); line-height: 1.4; }
 .oneoff.on { background: var(--brand-soft); border: 1px solid var(--brand-line); }
+.wprog { height: 10px; border-radius: 6px; background: rgba(255, 255, 255, .25); overflow: hidden; } .wprog i { display: block; height: 100%; border-radius: 6px; background: rgba(255, 255, 255, .95); }
+.kcard.hero.zero .wprog { background: var(--over-line); } .kcard.hero.zero .wprog i { background: var(--over-fill); }
+:root[data-theme="dark"] .kcard.hero:not(.zero) .wprog { background: rgba(0, 0, 0, .18); } :root[data-theme="dark"] .kcard.hero:not(.zero) .wprog i { background: rgba(0, 0, 0, .7); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .kcard.hero:not(.zero) .wprog { background: rgba(0, 0, 0, .18); } :root:not([data-theme="light"]) .kcard.hero:not(.zero) .wprog i { background: rgba(0, 0, 0, .7); } }
+.kcard.hero .ctag { font-size: 12.5px; line-height: 1.4; padding: 8px 10px; border-radius: 10px; background: rgba(0, 0, 0, .12); }

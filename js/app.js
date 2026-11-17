@@ -1,5 +1,5 @@
-import * as L from './logic.js?v=20261117m';
-import { SUPABASE_URL, SUPABASE_ANON_KEY } from './config.js?v=20261117m';
+import * as L from './logic.js?v=20261117n';
+import { SUPABASE_URL, SUPABASE_ANON_KEY } from './config.js?v=20261117n';
 
 const $app = document.getElementById('app');
 const $toast = document.getElementById('toast');
@@ -435,39 +435,22 @@ function weekReview(s) {
 function weekHero(s) {
   const w = s.week;
   if (!w || w.limit == null) {
-    return `<div class="kcard hero zero"><span class="kl">Resta nesta semana</span><span class="kv">—</span>
+    return `<div class="kcard hero zero"><span class="kl">Pode gastar nesta semana</span><span class="kv">—</span>
       <span class="ks">Informe suas entradas ou defina um limite em Ajustes para o app liberar um valor por semana.</span></div>`;
   }
   const over = w.left < 0;
-  const daily = w.limit / w.days || 1;
-  const names = ['dom', 'seg', 'ter', 'qua', 'qui', 'sex', 'sáb'];
-  const bars = w.days7.map(d => {
-    const h = d.future ? 0 : Math.min(100, Math.round(d.value / daily * 100));
-    const isToday = d.date === today();
-    return `<span class="wd ${isToday ? 'today' : ''}"><span class="wb"><i style="height:${h}%" class="${d.value > daily ? 'hi' : ''}"></i></span><small>${names[new Date(d.date + 'T12:00:00').getDay()]}</small></span>`;
-  }).join('');
   const up = lastUploadDay();
-  if (w.containment) {
-    const cz = s.containment;
-    const essTxt = cz.cats.length ? cz.cats.join(' e ') : 'o essencial';
-    return `<div class="kcard hero week contain ${over ? 'zero' : ''}">
-      <span class="r1"><span class="kl">Modo contenção · ${over ? 'passou nesta semana' : 'resta nesta semana'}</span><span class="kl" style="opacity:.9">${L.ddmm(w.start)}–${L.ddmm(w.end)}</span></span>
-      <span class="kv">${money(Math.abs(w.left))}</span>
-      <span class="ks">só ${esc(essTxt)}: ${money(w.limit)} nesta semana · gasto ${money(w.spent)}</span>
-      <div class="weekbars" aria-label="Gasto por dia da semana">${bars}</div>
+  // uma pergunta só: quanto ainda posso gastar nesta semana
+  const cz = w.containment ? s.containment : null;
+  const pct = w.limit > 0 ? Math.min(100, Math.round(w.spent / w.limit * 100)) : 100;
+  const range = `${L.weekdayShort(w.start)} ${L.ddmm(w.start)} a ${L.weekdayShort(w.end)} ${L.ddmm(w.end)}`;
+  return `<div class="kcard hero week ${over ? 'zero' : cz ? 'contain' : ''}">
+      <span class="r1"><span class="kl">Pode gastar nesta semana</span><span class="kl" style="opacity:.9">${range}</span></span>
+      <span class="kv">${money(Math.max(0, w.left))}</span>
+      <div class="wprog" aria-hidden="true"><i style="width:${pct}%"></i></div>
+      <span class="ks">gastou ${money(w.spent)} de ${money(w.limit)}${over ? ` · <b>passou ${money(-w.left)}</b>, que sai da próxima semana` : !over && w.daysLeft > 1 ? ` · ${money(w.perDay)} por dia até ${L.weekdayShort(w.end) === 'dom' ? 'domingo' : L.ddmm(w.end)}` : ''}</span>
+      ${cz ? `<span class="ctag">Modo contenção: o limite do mês acabou (passou ${money(s.freeSpent - s.freeBudget)}). A meta da semana cobre só ${esc(cz.cats.join(' e ') || 'o essencial')}.</span>` : ''}
       <div class="wfoot">
-        <span><span>Acima do limite do mês</span><b>${money(s.freeSpent - s.freeBudget)}</b></span>
-        <span><span>Faturas enviadas até</span><b>${up ? `${L.weekdayShort(up)} ${L.ddmm(up)}` : '—'}</b></span>
-      </div>
-    </div>`;
-  }
-  return `<div class="kcard hero week ${over ? 'zero' : ''}">
-      <span class="r1"><span class="kl">${over ? 'Passou nesta semana' : 'Resta nesta semana'}</span><span class="kl" style="opacity:.9">${L.weekdayShort(w.start)} ${L.ddmm(w.start)} – ${L.weekdayShort(w.end)} ${L.ddmm(w.end)}</span></span>
-      <span class="kv">${money(Math.abs(w.left))}</span>
-      <span class="ks">de ${money(w.limit)} · gasto ${money(w.spent)}</span>
-      <div class="weekbars" aria-label="Gasto por dia da semana">${bars}</div>
-      <div class="wfoot">
-        ${over ? '' : `<span><span>Por dia até ${L.weekdayShort(w.end) === 'dom' ? 'domingo' : L.ddmm(w.end)}</span><b>${money(w.perDay)}</b></span>`}
         <span><span>Faturas enviadas até</span><b>${up ? `${L.weekdayShort(up)} ${L.ddmm(up)}` : '—'}</b></span>
       </div>
     </div>`;
@@ -1533,7 +1516,7 @@ function pickFile() {
     if (f.size > 15e6) return toast('Arquivo grande demais para uma fatura.');
     let text;
     try {
-      if (/\.xlsx$/i.test(f.name)) { const X = await import('./xlsx.js?v=20261117m'); text = await X.xlsxToCSV(await f.arrayBuffer()); }
+      if (/\.xlsx$/i.test(f.name)) { const X = await import('./xlsx.js?v=20261117n'); text = await X.xlsxToCSV(await f.arrayBuffer()); }
       else if (/\.xls$/i.test(f.name)) return toast('Arquivo .xls antigo: abra no Excel e salve como .xlsx ou CSV.');
       else text = await f.text();
     } catch (err) { return toast('Não consegui ler o arquivo: ' + (err.message || err)); }
