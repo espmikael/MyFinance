@@ -668,6 +668,8 @@ export function summarize({ txs, rules, settings, cycle, today, incomes = [], av
     available: round(income - fixedCost),                 // o que sobra das entradas depois dos fixos
     leftover: round(income - fixedCost - varProjected),
     result: round(income - fixedCost - varSpent),
+    // saldo previsto do mês com o que já se sabe: entradas − contas − cartões até agora − parcelas/assinaturas que ainda vêm
+    balance: round(income - fixedCost - varSpent - (isPast ? 0 : commits.pendingTotal)),
     overBudget: round(varSpent - varBudget),               // só a parte variável: fixo não "estoura teto"
     toClassify, unclassifiedTotal, txs: inCycle,
     cumulative, overDay, bySource, topMerchants, weeks, week: weeks.find(w => w.status === 'now') || null,

@@ -1,5 +1,5 @@
-import * as L from './logic.js?v=20261117i';
-import { SUPABASE_URL, SUPABASE_ANON_KEY } from './config.js?v=20261117i';
+import * as L from './logic.js?v=20261117j';
+import { SUPABASE_URL, SUPABASE_ANON_KEY } from './config.js?v=20261117j';
 
 const $app = document.getElementById('app');
 const $toast = document.getElementById('toast');
@@ -372,7 +372,8 @@ function weekHero(s) {
       <span class="ks">Informe suas entradas ou defina um limite em Ajustes para o app liberar um valor por semana.</span></div>`;
   }
   const over = w.left < 0;
-  const daily = w.limit / w.days || 1;
+  const monthOver = s.freeBudget > 0 && s.freeSpent > s.freeBudget && w.limit < 1;   // não sobrou nada para liberar
+  const daily = w.limit / w.days || Math.max(1, s.freeBudget / s.totalDays);
   const names = ['dom', 'seg', 'ter', 'qua', 'qui', 'sex', 'sáb'];
   const bars = w.days7.map(d => {
     const h = d.future ? 0 : Math.min(100, Math.round(d.value / daily * 100));
@@ -380,6 +381,17 @@ function weekHero(s) {
     return `<span class="wd ${isToday ? 'today' : ''}"><span class="wb"><i style="height:${h}%" class="${d.value > daily ? 'hi' : ''}"></i></span><small>${names[new Date(d.date + 'T12:00:00').getDay()]}</small></span>`;
   }).join('');
   const up = lastUploadDay();
+  if (monthOver) return `<div class="kcard hero week zero">
+      <span class="r1"><span class="kl">Dia a dia acima do limite do mês</span><span class="kl" style="opacity:.9">até ${L.ddmm(s.cycle.end)}</span></span>
+      <span class="kv">${money(s.freeSpent - s.freeBudget)}</span>
+      <span class="ks">gasto ${money(s.freeSpent)} de um limite de <b>${money(s.freeBudget)}</b>. Não sobrou valor para liberar nesta semana.</span>
+      <div class="weekbars" aria-label="Gasto por dia da semana">${bars}</div>
+      <div class="wfoot">
+        <span><span>Nesta semana (${L.ddmm(w.start)}–${L.ddmm(w.end)})</span><b>${money(w.spent)}</b></span>
+        <span><span>Cartão conferido até</span><b>${up ? `${L.weekdayShort(up)} ${L.ddmm(up)}` : 'nenhum envio'}</b></span>
+        <span><span>Até ${L.ddmm(s.cycle.end)}, cada real no cartão vira dívida</span><b></b></span>
+      </div>
+    </div>`;
   return `<div class="kcard hero week ${over ? 'zero' : ''}">
       <span class="r1"><span class="kl">${over ? 'Passou nesta semana' : 'Resta nesta semana'}</span><span class="kl" style="opacity:.9">${L.weekdayShort(w.start)} ${L.ddmm(w.start)} – ${L.weekdayShort(w.end)} ${L.ddmm(w.end)}</span></span>
       <span class="kv">${money(Math.abs(w.left))}</span>
@@ -395,15 +407,15 @@ function weekHero(s) {
 
 function homeNumbers(s) {
   const inc = s.incomeItems;
-  const sobra = s.isCurrent ? s.leftover : s.result;
+  const sobra = s.isPast ? s.result : s.balance;
   const next = inc.find(i => !i.received);
   const k = (label, value, bar, foot, cls = '', act = '') => `<${act ? 'button' : 'div'} class="kcard" ${act}><span class="kl">${label}</span><span class="kv ${cls}">${value}</span>${bar}<span class="ks">${foot}</span></${act ? 'button' : 'div'}>`;
   const limBar = s.freeBudget > 0 ? `<div class="thinbar ${s.freeSpent > s.freeBudget ? 'over' : ''}" aria-hidden="true"><i style="width:${Math.min(100, Math.round(s.freeSpent / s.freeBudget * 100))}%"></i></div>` : '';
   const sCls = s.income > 0 ? (sobra < 0 ? 'neg' : 'pos') : '';
   const cards = [
-    k('Dia a dia no mês', s.freeBudget > 0 ? money(s.freeBudget) : '—', limBar, `gasto ${money(s.freeSpent)}`),
+    k('Limite do dia a dia', s.freeBudget > 0 ? money(s.freeBudget) : '—', limBar, s.freeSpent > s.freeBudget && s.freeBudget > 0 ? `gasto ${money(s.freeSpent)} · passou ${money(s.freeSpent - s.freeBudget)}` : `gasto ${money(s.freeSpent)}`),
     k('Próxima entrada', next ? money(next.amount) : '—', '', next ? `${esc(next.name.toLowerCase())} · ${L.weekdayShort(next.date)} ${L.ddmm(next.date)}` : 'todas recebidas', next ? 'pos' : ''),
-    k('Sobra prevista', s.income > 0 ? (sobra >= 0 && !state.priv ? '+' : '') + signed(sobra) : '—', '', 'no ritmo do dia a dia ›', sCls, 'data-act="view" data-v="mes" aria-label="Ver o mês"'),
+    k('Saldo previsto do mês', s.income > 0 ? (sobra >= 0 && !state.priv ? '+' : '') + signed(sobra) : '—', '', 'entradas − contas − cartões ›', sCls, 'data-act="view" data-v="mes" aria-label="Ver o mês"'),
   ].join('');
   return `<div class="only-desk"><section class="kgrid" aria-label="Resumo">${weekHero(s)}${cards}</section></div>
     <div class="only-mob" style="display:flex;flex-direction:column;gap:14px">${weekHero(s)}<section class="mini3" aria-label="Resumo do mês">${cards}</section></div>`;
@@ -424,8 +436,7 @@ function possoCard(s) {
     const after = nxt && restDays > 0 ? Math.max(0, ml - amt) * nxt.days / restDays : 0;
     v = { cls: 'warn', ic: '!', t: 'Passa da semana, cabe no mês', x: `Passa ${money(amt - wl)} desta semana.${nxt ? ` A próxima (${L.ddmm(nxt.start)}–${L.ddmm(nxt.end)}) libera cerca de ${money(after)} em vez de ${money(nxt.limit)}.` : ''}` };
   } else {
-    const sobraAfter = s.leftover - (amt - ml);
-    v = { cls: 'no', ic: '!', t: 'Não cabe no mês', x: `Passa ${money(amt - ml)} do que resta do limite.${s.income > 0 ? ` A sobra prevista de ${mName(s.month)} vai de ${signed(s.leftover)} para ${signed(sobraAfter)}.` : ''}` };
+    v = { cls: 'no', ic: '!', t: 'Não cabe no mês', x: `Passa ${money(amt - ml)} do que resta do limite.${s.income > 0 ? ` O saldo previsto de ${mName(s.month)} vai de ${signed(s.balance)} para ${signed(s.balance - amt)}.` : ''}` };
   }
   return `<section class="card" id="pc" aria-labelledby="pc-h">
     <div class="card-head"><h2 id="pc-h">Posso comprar?</h2><span class="sub">conta a semana e o mês</span></div>
@@ -590,9 +601,10 @@ function viewMes() {
   const c = card();
   const future = !m.isCurrent && !m.isPast;
   const canPay = ym <= today().slice(0, 7);
-  const cardOut = m.isPast ? m.varSpent : m.varProjected;
-  const sobra = m.income - m.fixedCost - cardOut;
-  const sobraLbl = m.isPast ? 'Sobra do mês' : future ? 'Sobra prevista' : 'Sobra prevista no ritmo do dia a dia';
+  const pend = m.isPast ? 0 : m.commits.pendingTotal;
+  const cardOut = m.varSpent + pend;                       // cartões: o que já gastou + parcelas/assinaturas que ainda vêm
+  const sobra = m.isPast ? m.result : m.balance;
+  const sobraLbl = m.isPast ? 'Resultado do mês' : 'Saldo previsto do mês';
   const inLimit = m.isCurrent && m.varBudget > 0 ? m.income - m.fixedCost - m.planProjected : null;
   const aporte = Number(state.settings.aporteGoal) || 0;
 
@@ -601,8 +613,8 @@ function viewMes() {
   const flow = [
     ['Entradas', 0, m.income, 'var(--ok-fill)', money(m.income), 'pos'],
     ['− Contas', m.income - m.fixedCost, m.fixedCost, 'var(--fixed-fill)', '−' + money(m.fixedCost), ''],
-    [`− Cartão${m.isCurrent ? ' (projeção)' : ''}`, m.income - m.fixedCost - cardOut, cardOut, 'var(--over-fill)', '−' + money(cardOut), ''],
-    ['= Sobra', 0, Math.max(0, sobra), sobra < 0 ? 'var(--over-fill)' : 'var(--ok-fill)', signed(sobra), sobra < 0 ? 'neg' : 'pos'],
+    [`− Cartões${pend > 0 ? ' (+ a vir)' : ''}`, m.income - m.fixedCost - cardOut, cardOut, 'var(--over-fill)', '−' + money(cardOut), ''],
+    ['= Saldo', 0, Math.max(0, sobra), sobra < 0 ? 'var(--over-fill)' : 'var(--ok-fill)', signed(sobra), sobra < 0 ? 'neg' : 'pos'],
   ].map(([l, x, w, col, v, cls]) => `<div class="flow"><span>${l}</span><span class="fb" aria-hidden="true"><i style="left:${W(Math.max(0, x))};width:${W(w)};background:${col}"></i></span><b class="${cls}">${v}</b></div>`).join('');
 
   const limSub = m.limitMode === 'manual' ? 'definido por você' : 'entradas − contas − aporte';
@@ -649,7 +661,11 @@ function viewMes() {
         <section class="card" aria-labelledby="sb-h">
           <span id="sb-h" class="k">${sobraLbl}</span>
           <span class="big ${m.income > 0 ? (sobra < 0 ? 'neg' : 'pos') : ''}" style="display:block;margin:4px 0">${m.income > 0 ? (sobra >= 0 && !state.priv ? '+' : '') + signed(sobra) : '—'}</span>
-          ${inLimit != null ? `<p class="small" style="margin:0 0 12px;color:var(--text-2)">Seguindo o liberado de cada semana, sobram <b>${money(inLimit)}</b>${aporte > 0 && Math.abs(inLimit - aporte) < 1 ? ': o aporte planejado' : ''}.</p>` : ''}
+          <p class="small" style="margin:0 0 12px;color:var(--text-2)">${m.isPast ? 'O que entrou menos o que saiu na competência.' : `Com o que já aconteceu: entradas do mês − contas − tudo o que já foi para os cartões${pend > 0 ? ` − ${money(pend)} de parcelas e assinaturas que ainda vêm` : ''}. É o saldo se você não gastar mais nada.`}</p>
+          ${m.isCurrent ? `<div class="scen">
+            ${inLimit != null && m.planProjected > m.varSpent + pend + 0.5 ? `<div><span>Se gastar só o liberado até ${L.ddmm(m.cycle.end)}</span><b class="${inLimit < 0 ? 'neg' : ''}">${signed(inLimit)}</b></div>` : ''}
+            <div><span>Se continuar no ritmo dos últimos dias</span><b class="${m.leftover < 0 ? 'neg' : ''}">${signed(m.leftover)}</b></div>
+          </div>` : ''}
           <div class="flows">${flow}</div>
           ${m.varBudget > 0 ? `<div class="limbox"><span><b>Limite do variável: ${money(m.varBudget)}</b><small>${limSub}</small></span><button class="btn small" data-act="view" data-v="ajustes">Ajustar</button></div>
           <div class="splitlim">
@@ -1387,7 +1403,7 @@ function pickFile() {
     if (f.size > 15e6) return toast('Arquivo grande demais para uma fatura.');
     let text;
     try {
-      if (/\.xlsx$/i.test(f.name)) { const X = await import('./xlsx.js?v=20261117i'); text = await X.xlsxToCSV(await f.arrayBuffer()); }
+      if (/\.xlsx$/i.test(f.name)) { const X = await import('./xlsx.js?v=20261117j'); text = await X.xlsxToCSV(await f.arrayBuffer()); }
       else if (/\.xls$/i.test(f.name)) return toast('Arquivo .xls antigo: abra no Excel e salve como .xlsx ou CSV.');
       else text = await f.text();
     } catch (err) { return toast('Não consegui ler o arquivo: ' + (err.message || err)); }

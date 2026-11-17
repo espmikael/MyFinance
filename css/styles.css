@@ -459,3 +459,5 @@ details.more { margin-top: 12px; } details.more > summary { cursor: pointer; fon
 .rv-list > div > span { display: flex; flex-direction: column; min-width: 0; } .rv-list small { font-size: 12px; color: var(--muted); } .rv-list b { white-space: nowrap; }
 [hidden] { display: none !important; }
 .card.review .card-head { flex-wrap: nowrap; align-items: flex-start; } .card.review .card-head h2 { flex: 1 1 auto; min-width: 0; }
+.scen { display: flex; flex-direction: column; gap: 6px; margin: 0 0 14px; padding: 10px 12px; border-radius: 12px; background: var(--raise); }
+.scen > div { display: flex; justify-content: space-between; gap: 10px; font-size: 13.5px; } .scen span { color: var(--text-2); } .scen b { white-space: nowrap; font-variant-numeric: tabular-nums; }
