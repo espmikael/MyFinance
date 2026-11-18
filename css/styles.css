@@ -533,3 +533,5 @@ button.slim .go { margin-left: auto; font-weight: 700; } button.slim .dot { widt
 .lockscreen .btn.grow { width: 100%; justify-content: center; gap: 8px; }
 .lockpass { display: flex; flex-direction: column; gap: 8px; width: 100%; margin-top: 10px; padding-top: 14px; border-top: 1px solid var(--line-soft); text-align: left; }
 .lockscreen { display: flex; flex-direction: column; }
+.icon-btn.cur { background: var(--brand-soft); border-color: var(--brand-line); color: var(--brand-text); }
+.chart svg[data-chart] { touch-action: pan-y; }

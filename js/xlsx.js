@@ -27,7 +27,7 @@ async function unzip(buf) {
     const nlen = u16(b, p + 28), xlen = u16(b, p + 30), clen = u16(b, p + 32), lho = u32(b, p + 42);
     const name = dec.decode(b.subarray(p + 46, p + 46 + nlen));
     p += 46 + nlen + xlen + clen;
-    if (!/^xl\/(sharedStrings\.xml|worksheets\/sheet1\.xml|workbook\.xml)$/.test(name)) continue;
+    if (!/^xl\/(sharedStrings\.xml|worksheets\/sheet\d+\.xml|workbook\.xml|_rels\/workbook\.xml\.rels)$/.test(name)) continue;
     if (usize > 30e6) throw new Error('Planilha grande demais.');
     const start = lho + 30 + u16(b, lho + 26) + u16(b, lho + 28);
     const data = b.subarray(start, start + csize);
@@ -41,17 +41,22 @@ const colIndex = ref => { let n = 0; for (const ch of ref.replace(/\d+/g, '')) n
 const serialToISO = v => new Date(Math.round((v - 25569) * 86400000)).toISOString().slice(0, 10);
 
 export function sheetToRows(sheetXML, sharedXML = '') {
-  const shared = [...sharedXML.matchAll(/<si>([\s\S]*?)<\/si>/g)].map(m => unxml([...m[1].matchAll(/<t[^>]*>([\s\S]*?)<\/t>/g)].map(x => x[1]).join('')));
+  // alguns geradores (LibreOffice, exportadores em Java/.NET) usam prefixo (<x:row>) e aspas simples
+  const NS = '(?:[\\w.-]+:)?';
+  // abre com <tag ...> (nunca o vazio <tag .../>) e fecha em </tag>
+  const tag = (name, flags = 'g') => new RegExp(`<${NS}${name}(?:\\s[^>]*[^/>])?>([\\s\\S]*?)<\\/${NS}${name}>`, flags);
+  const texts = xml => [...xml.matchAll(tag('t'))].map(x => x[1]).join('');
+  const shared = [...sharedXML.matchAll(tag('si'))].map(m => unxml(texts(m[1])));
   const rows = [];
-  for (const rm of sheetXML.matchAll(/<row[^>]*>([\s\S]*?)<\/row>/g)) {
+  for (const rm of sheetXML.matchAll(tag('row'))) {
     const row = [];
-    for (const cm of rm[1].matchAll(/<c ([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g)) {
+    for (const cm of rm[1].matchAll(new RegExp(`<${NS}c\\s([^>]*?)(?:\\/>|>([\\s\\S]*?)<\\/${NS}c>)`, 'g'))) {
       const attrs = cm[1], inner = cm[2] || '';
-      const ref = (attrs.match(/r="([A-Z]+\d+)"/) || [])[1];
-      const t = (attrs.match(/t="(\w+)"/) || [])[1];
-      let v = (inner.match(/<v>([\s\S]*?)<\/v>/) || [])[1];
+      const ref = (attrs.match(/\br=["']([A-Z]+\d+)["']/) || [])[1];
+      const t = (attrs.match(/\bt=["'](\w+)["']/) || [])[1];
+      let v = (inner.match(tag('v', '')) || [])[1];
       if (t === 's') v = shared[+v] ?? '';
-      else if (t === 'inlineStr') v = unxml([...inner.matchAll(/<t[^>]*>([\s\S]*?)<\/t>/g)].map(x => x[1]).join(''));
+      else if (t === 'inlineStr') v = unxml(texts(inner));
       else if (v != null) v = unxml(v);
       row[ref ? colIndex(ref) : row.length] = v ?? '';
     }
@@ -69,9 +74,23 @@ export function sheetToRows(sheetXML, sharedXML = '') {
 const csvCell = v => { const s = String(v ?? ''); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
 export const rowsToCSV = rows => rows.map(r => r.map(csvCell).join(',')).join('\n');
 
+// a primeira aba da pasta de trabalho (nem sempre é sheet1.xml: abas apagadas ou reordenadas mudam o número)
+function firstSheet(f) {
+  const wb = f['xl/workbook.xml'] || '', rels = f['xl/_rels/workbook.xml.rels'] || '';
+  const s1 = wb.match(/<(?:[\w.-]+:)?sheet\s[^>]*?\br:id=["']([^"']+)["']/);
+  if (s1) {
+    const rel = [...rels.matchAll(/<(?:[\w.-]+:)?Relationship\s([^>]*)\/?>/g)].map(m => m[1]).find(a => new RegExp(`\\bId=["']${s1[1]}["']`).test(a));
+    const target = rel && (rel.match(/\bTarget=["']([^"']+)["']/) || [])[1];
+    if (target) { const path = target.startsWith('/') ? target.slice(1) : 'xl/' + target.replace(/^\.\//, ''); if (f[path]) return f[path]; }
+  }
+  if (f['xl/worksheets/sheet1.xml']) return f['xl/worksheets/sheet1.xml'];
+  const k = Object.keys(f).filter(x => /^xl\/worksheets\/sheet\d+\.xml$/.test(x)).sort((a, b) => parseInt(a.match(/\d+/)) - parseInt(b.match(/\d+/)))[0];
+  return k ? f[k] : null;
+}
+
 export async function xlsxToCSV(buf) {
   const f = await unzip(buf);
-  const sheet = f['xl/worksheets/sheet1.xml'];
+  const sheet = firstSheet(f);
   if (!sheet) throw new Error('Não encontrei a primeira aba da planilha.');
   return rowsToCSV(sheetToRows(sheet, f['xl/sharedStrings.xml'] || ''));
 }

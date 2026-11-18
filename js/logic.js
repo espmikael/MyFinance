@@ -82,28 +82,7 @@ export const DEFAULT_SETTINGS = {
   ],
 };
 
-// ---------- migração das categorias antigas (v1) para as rubricas da planilha ----------
-const OLD_TO_NEW = {
-  'Refeições livres': 'Alimentação', 'Mimos': 'Alimentação',
-  'Suplementos': 'Bem-Estar e Saúde', 'Saúde': 'Bem-Estar e Saúde',
-  'Outros': 'Pequenos gastos', 'Assinaturas': 'Despesas Pessoais', 'Parcelas': null,
-};
-const OLD_SUBS = [
-  [/wellhub|smart ?fit|academia/, 'Bem-Estar e Saúde'],
-  [/one membership|uber/, 'Transporte'],
-  [/ifood/, 'Alimentação'],
-  [/spotify|netflix|paramount|melimais|hbo|max|disney|prime|globoplay|youtube|deezer/, 'Lazer e Entretenimento'],
-  [/nio|fibra|internet|vivo|claro|tim/, 'Casa'],
-];
-export const isOldCategory = name => Object.prototype.hasOwnProperty.call(OLD_TO_NEW, name);
-// Nova rubrica para uma regra/compra antiga. undefined = não muda; null = volta para "sem categoria".
-export function migrateCategory(oldCat, text = '') {
-  if (!isOldCategory(oldCat)) return undefined;
-  const t = normalize(text);
-  if (oldCat === 'Assinaturas') { const hit = OLD_SUBS.find(([re]) => re.test(t)); return hit ? hit[1] : 'Despesas Pessoais'; }
-  if (oldCat === 'Outros' && /steam|jogo|game/.test(t)) return 'Lazer e Entretenimento';
-  return OLD_TO_NEW[oldCat];
-}
+// ---------- migração dos ajustes antigos (v1) ----------
 export function fixedCategoryGuess(name) {
   const t = normalize(name);
   if (/aluguel|condominio|luz|agua|internet|gas|iptu/.test(t)) return 'Casa';
@@ -417,7 +396,10 @@ export function dueDateFor(cycle, card) {
   const [y, m] = closeDate.split('-').map(Number);
   const due = card.due || 10;
   const sameMonth = due > clampDay(card.closing || 1);
-  return fmtISO(Date.UTC(y, m - 1 + (sameMonth ? 0 : 1), due));
+  // vencimento 29–31 em mês mais curto cai no último dia do mês (não transborda para o seguinte)
+  const tm = m - 1 + (sameMonth ? 0 : 1);
+  const last = new Date(Date.UTC(y, tm + 1, 0)).getUTCDate();
+  return fmtISO(Date.UTC(y, tm, Math.min(due, last)));
 }
 
 export function invoiceName(cycle, card, today) {
@@ -813,12 +795,6 @@ export function averageByCategory({ txs, rules, settings, incomes, today, cycles
     out[cat.name] = vals.length ? round(vals.reduce((a, b) => a + b, 0) / vals.length) : 0;
   }
   return { cycles: used.map(s => s.cycle), avg: out };
-}
-
-// Total gasto (sem ignorados) num ciclo — usado para comparar com a fatura anterior.
-export function cycleTotal(txs, rules, cycle) {
-  return round(txs.filter(t => t.date >= cycle.start && t.date <= cycle.end && categoryOf(t, rules) !== IGNORE)
-    .reduce((s, t) => s + Number(t.amount), 0));
 }
 
 // Gera as linhas de um gasto parcelado lançado à mão.

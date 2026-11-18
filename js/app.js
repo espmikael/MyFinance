@@ -1,5 +1,5 @@
-import * as L from './logic.js?v=20261117q';
-import { SUPABASE_URL, SUPABASE_ANON_KEY } from './config.js?v=20261117q';
+import * as L from './logic.js?v=20261118a';
+import { SUPABASE_URL, SUPABASE_ANON_KEY } from './config.js?v=20261118a';
 
 const $app = document.getElementById('app');
 const $toast = document.getElementById('toast');
@@ -38,7 +38,6 @@ const state = {
   contasMonth: null,     // 'YYYY-MM' na tela Contas
   contasKind: 'exact',   // aba da tela Contas
   homeTab: 'a',          // Contas do mês no Início: a pagar / pagas
-  pc: { amt: 50, cat: null }, // posso comprar?
   priv: (() => { try { return localStorage.getItem('mf-priv') === '1'; } catch (e) { return false; } })(),
   busy: false,
   lastBatch: null,       // último envio de fatura, para desfazer
@@ -182,27 +181,6 @@ async function loadAll() {
   if (!state.rules.length) state.rules = await q(sb.from('rules').insert(L.DEFAULT_RULES).select('id,keyword,category'));
 
   await Promise.all([loadTxs(), loadSmall()]);
-  if (s && (s.data.version || 1) < 2) await migrateV2(s.data);
-}
-
-// Uma vez só: troca as categorias antigas pelas rubricas da planilha (regras, compras classificadas e ajustes).
-async function migrateV2(raw) {
-  for (const r of state.rules) {
-    const to = L.migrateCategory(r.category, r.keyword);
-    if (to === undefined) continue;
-    if (to === null) await sb.from('rules').delete().eq('id', r.id);
-    else await sb.from('rules').update({ category: to }).eq('id', r.id);
-  }
-  const have = new Set(state.rules.map(r => L.normalize(r.keyword)));
-  const missing = L.DEFAULT_RULES.filter(r => !have.has(L.normalize(r.keyword)));
-  if (missing.length) await sb.from('rules').insert(missing);
-  for (const t of state.txs) {
-    const to = L.migrateCategory(t.category, t.title);
-    if (to !== undefined) await sb.from('transactions').update({ category: to }).eq('id', t.id);
-  }
-  await saveSettings(L.migrateSettings(raw));
-  state.rules = await q(sb.from('rules').select('id,keyword,category').order('id'));
-  await loadTxs();
 }
 
 async function loadTxs() {
@@ -239,6 +217,7 @@ async function reloadAll() {
 let realtimeTimer = null;
 function listenRealtime() {
   if (!sb.channel) return;
+  if (sb.removeAllChannels) sb.removeAllChannels();   // nunca dois canais ao mesmo tempo
   sb.channel('caixa').on('postgres_changes', { event: '*', schema: 'public' }, () => {
     clearTimeout(realtimeTimer);
     realtimeTimer = setTimeout(reloadAll, 700);
@@ -352,6 +331,9 @@ function averages() {
   avgMemo = { k, v };
   return v;
 }
+// troca um gasto por uma cópia alterada (lista nova = o cache das médias percebe a mudança)
+function setTx(id, patch) { state.txs = state.txs.map(x => (x.id === id ? { ...x, ...patch } : x)); }
+
 function summary(cycle) {
   const a = averages();
   return L.summarize({ txs: state.txs, rules: state.rules, settings: state.settings, cycle, today: today(), incomes: state.incomes, avg: a.cycles.length ? a.avg : null });
@@ -364,7 +346,7 @@ function headActions({ upload = true } = {}) {
     ${upload ? `<button class="btn only-desk-inline" data-act="upload" ${state.busy ? 'disabled' : ''}>${state.busy ? 'Enviando…' : 'Enviar fatura'}</button>
     <button class="icon-btn only-mob" data-act="upload" aria-label="Enviar fatura">${icon('up')}</button>` : ''}
     <button class="btn primary only-desk-inline" data-act="lancar">${icon('plus', 16, 2.4)}Lançar</button>
-    <button class="icon-btn only-mob" data-act="menu" aria-label="Mais opções">${icon('more', 20)}</button>
+    <button class="icon-btn only-mob ${['reservas', 'ajustes', 'entradas'].includes(state.view) ? 'cur' : ''}" data-act="menu" aria-label="Mais opções" ${['reservas', 'ajustes'].includes(state.view) ? 'aria-current="page"' : ''}>${icon('more', 20)}</button>
   </div>`;
 }
 const pageHead = (title, sub, actions = headActions(), cls = '') => `<header class="pagehead ${cls}"><div class="t">${state.view !== 'home' ? `<button class="backbtn" data-act="back" aria-label="Voltar">‹ Voltar</button>` : ''}<h1 class="page-title">${title}</h1>${sub ? `<span class="sub">${sub}</span>` : ''}</div>${actions}</header>`;
@@ -571,35 +553,6 @@ function homeNumbers(s) {
     <div class="only-mob" style="display:flex;flex-direction:column;gap:14px">${weekHero(s)}<section class="mini3" aria-label="Resumo do mês">${cards}</section></div>`;
 }
 
-// Posso comprar? — contra a semana e o mês
-function possoCard(s) {
-  const w = s.week;
-  if (!s.isCurrent || !(s.varBudget > 0) || !w) return '';
-  const amt = Number(state.pc.amt) || 0;
-  const wl = Math.max(0, w.left), ml = s.varLeft;
-  const nxt = s.weeks[s.weeks.indexOf(w) + 1];
-  const restDays = L.daysBetween(w.end, s.cycle.end);
-  let v;
-  if (!amt) v = { cls: 'ok', ic: icon('check', 18, 2.6), t: `Cabem ${money(wl)} nesta semana`, x: `E ${money(ml)} até o fim do ciclo (${L.dayMonth(s.cycle.end)}). Escolha um valor para testar.` };
-  else if (amt <= wl) v = { cls: 'ok', ic: icon('check', 18, 2.6), t: 'Cabe na semana', x: `Sobram ${money(wl - amt)} até ${L.weekdayShort(w.end) === 'dom' ? 'domingo' : L.ddmm(w.end)}${w.daysLeft > 1 ? ` (≈ ${money((wl - amt) / w.daysLeft)} por dia)` : ''}.` };
-  else if (amt <= ml) {
-    const after = nxt && restDays > 0 ? Math.max(0, ml - amt) * nxt.days / restDays : 0;
-    v = { cls: 'warn', ic: '!', t: 'Passa da semana, cabe no mês', x: `Passa ${money(amt - wl)} desta semana.${nxt ? ` A próxima (${L.ddmm(nxt.start)}–${L.ddmm(nxt.end)}) libera cerca de ${money(after)} em vez de ${money(nxt.limit)}.` : ''}` };
-  } else {
-    v = { cls: 'no', ic: '!', t: 'Não cabe no mês', x: `Passa ${money(amt - ml)} do que resta do limite.${s.income > 0 ? ` O saldo previsto de ${mName(s.month)} vai de ${signed(s.balance)} para ${signed(s.balance - amt)}.` : ''}` };
-  }
-  return `<section class="card" id="pc" aria-labelledby="pc-h">
-    <div class="card-head"><h2 id="pc-h">Posso comprar?</h2><span class="sub">conta a semana e o mês</span></div>
-    <div class="amt-row">${[20, 50, 100, 250].map(x => `<button class="chip" data-act="pc-amt" data-v="${x}" aria-pressed="${amt === x}">R$ ${x}</button>`).join('')}
-      <label class="money"><span>R$</span><input id="pc-in" inputmode="decimal" placeholder="outro" aria-label="Outro valor" value="${[20, 50, 100, 250].includes(amt) || !amt ? '' : fmtIn(amt)}"></label></div>
-    <div class="verdict ${v.cls}" aria-live="polite"><span class="ic">${v.ic}</span><div><b>${v.t}</b><span>${v.x}</span></div></div>
-  </section>`;
-}
-function refreshPC() {
-  const el = document.getElementById('pc');
-  if (el) { el.outerHTML = possoCard(summary(curCycle())); }
-}
-
 // Agenda do dinheiro
 function agendaCard(s) {
   const st = state.settings;
@@ -635,35 +588,6 @@ function agendaCard(s) {
     ${!hasBal ? '<p class="help">Com o saldo da conta, a agenda mostra quanto sobra depois de cada entrada e saída e avisa antes de ficar no negativo.</p>' : ''}
     <div class="agenda" style="margin-top:6px">${rows || `<p class="help">Nada previsto nos próximos 7 dias.</p>`}</div>
     ${hiddenN > 0 || state.agendaAll ? `<button class="row add" data-act="agenda-all">${state.agendaAll ? 'Mostrar só os próximos 7 dias' : `Ver as próximas 5 semanas (+${hiddenN})`}</button>` : ''}
-  </section>`;
-}
-
-// Meus cartões
-function cardsCard() {
-  const st = state.settings;
-  const invs = L.cardInvoices(st, state.txs, state.rules, today());
-  const hidden = new Set(st.hiddenCards || []);
-  const shown = invs.filter(i => !hidden.has(i.card.id)), off = invs.filter(i => hidden.has(i.card.id));
-  const total = shown.reduce((a, i) => a + i.total, 0);
-  const one = i => {
-    const c = i.card, color = safeColor(c.color);
-    const status = !i.configured ? ['Sem datas', 'n'] : i.daysToClose <= 7 ? [`Fecha em ${i.daysToClose} ${i.daysToClose === 1 ? 'dia' : 'dias'}`, 'w'] : ['Aberta', ''];
-    return `<div class="cc">
-      <button class="cface" data-act="card-open" data-id="${esc(c.id)}" aria-label="Ver gastos do ${esc(c.name)}" style="background:${color};border:0;padding:0;text-align:left">
-        <span class="b">${esc(c.name)}</span><span class="tier">${c.primary ? 'PRINCIPAL' : 'CRÉDITO'}</span>
-        <span class="chipc" aria-hidden="true"></span><span class="nfc">${icon('nfc', 20)}</span>
-        ${c.last4 ? `<span class="num4">•••• ${esc(String(c.last4).slice(-4))}</span>` : ''}<span class="kind">crédito</span>
-      </button>
-      <div class="cinfo"><span class="v"><small>${L.invoiceName(i.cycle, i.configured ? c : card(), today())}</small><b>${money(i.total)}</b></span>
-        <span class="r"><span class="status ${status[1]}">${status[0]}</span><button class="icon-btn sm" data-act="card-hide" data-id="${esc(c.id)}" aria-label="Ocultar ${esc(c.name)}" title="Ocultar este cartão">${icon('eyeOff', 15)}</button></span></div>
-      <div class="segbar mid" aria-hidden="true">${segs(i.len, i.elapsed, 'on', `background:${color}`)}</div>
-      <span class="small muted">${i.configured ? `fecha ${L.ddmm(L.addDays(i.cycle.end, 1))} · vence ${L.ddmm(i.due)} · dia ${i.elapsed} de ${i.len}` : 'Informe o fechamento e o vencimento em Ajustes'}</span>
-    </div>`;
-  };
-  return `<section class="card" aria-labelledby="mc-h">
-    <div class="card-head"><h2 id="mc-h">Meus cartões</h2><span class="sub">aberto <b style="color:var(--text)">${money(total)}</b></span></div>
-    ${shown.length ? `<div class="ccards">${shown.map(one).join('')}</div>` : '<p class="help">Todos os cartões estão ocultos.</p>'}
-    ${off.length ? `<div class="hidden-cards" style="margin-top:12px">${off.map(i => `<button class="chip dashed" data-act="card-show" data-id="${esc(i.card.id)}"><span class="dot" style="background:${safeColor(i.card.color)}"></span>${esc(i.card.name)} oculto · mostrar</button>`).join('')}</div>` : ''}
   </section>`;
 }
 
@@ -1112,8 +1036,13 @@ function wireCharts() {
       tip.style.top = `${((y - vb.y) / vb.height) * r.height}px`;
       tip.classList.add('on');
     };
+    const hide = () => { tip.classList.remove('on'); cross.style.display = 'none'; };
+    svg.addEventListener('pointerdown', move);
     svg.addEventListener('pointermove', move);
-    svg.addEventListener('pointerleave', () => { tip.classList.remove('on'); cross.style.display = 'none'; });
+    svg.addEventListener('pointerleave', hide);
+    svg.addEventListener('pointercancel', hide);
+    // no toque, o dedo sai da tela sem "leave": esconde um instante depois
+    svg.addEventListener('pointerup', e => { if (e.pointerType !== 'mouse') setTimeout(hide, 1500); });
   });
 }
 
@@ -1389,17 +1318,7 @@ document.addEventListener('click', async e => {
       try { localStorage.setItem('mf-priv', state.priv ? '1' : '0'); } catch (e2) {}
       { const y = window.scrollY; render(); window.scrollTo(0, y); } return;
     case 'menu': return menuSheet();
-    case 'card-hide': case 'card-show': {
-      const next = structuredClone(state.settings);
-      const set = new Set(next.hiddenCards || []);
-      if (act === 'card-hide') set.add(el.dataset.id); else set.delete(el.dataset.id);
-      next.hiddenCards = [...set];
-      if (await saveSettings(next)) { const y = window.scrollY; render(); window.scrollTo(0, y); }
-      return;
-    }
     case 'card-open': return go('gastos', { filter: 'src:' + el.dataset.id, cycle: curCycle() });
-    case 'pc-amt': state.pc.amt = Number(el.dataset.v); return refreshPC();
-    case 'pc-cat': state.pc.cat = el.dataset.v; return refreshPC();
     case 'home-card': state.homeCard = el.dataset.v; { const y = window.scrollY; render(); window.scrollTo(0, y); } return;
     case 'home-tab': state.homeTab = el.dataset.v; { const y = window.scrollY; render(); window.scrollTo(0, y); } return;
     case 'balance': return balanceSheet();
@@ -1441,7 +1360,6 @@ document.addEventListener('click', async e => {
     case 'inc-edit': return incomeEditSheet(el.dataset.ym || L.monthOfCycle(state.cycle));
     case 'fix-edit': return go('mes');
     case 'cat-open': return go('gastos', { filter: 'cat:' + el.dataset.c, cycle: state.view === 'home' ? curCycle() : null });
-    case 'suggest': return suggestSheet();
     case 'fix-pay': return payFixed(Number(el.dataset.i), el.dataset.ym);
     case 'fix-unpay': return txSheet(Number(el.dataset.id));
   }
@@ -1469,16 +1387,6 @@ async function payFixed(i, ym) {
 // edição dos ajustes: cada campo escreve direto no rascunho
 document.addEventListener('input', e => {
   if (e.target.id === 'gq') { state.q = e.target.value; const box = document.getElementById('txlist'); if (box) box.innerHTML = gastosList(summary(state.cycle)); return; }
-  if (e.target.id === 'pc-in') {
-    const v = num(e.target.value);
-    if (!(v > 0)) return;
-    state.pc.amt = v;
-    const pos = e.target.selectionStart;
-    refreshPC();
-    const inp = document.getElementById('pc-in');
-    if (inp) { inp.focus(); try { inp.setSelectionRange(pos, pos); } catch (e2) {} }
-    return;
-  }
   bindInput(e.target);
 });
 document.addEventListener('change', e => {
@@ -1532,13 +1440,29 @@ async function saveDraft() {
   }
 }
 
+// Uma palavra, uma regra: se a palavra já existe, troca a rubrica dela em vez de criar outra
+// (com duas regras iguais, a mais antiga venceria e a nova pareceria não funcionar)
+async function upsertRule(kw, category) {
+  const existing = state.rules.find(r => L.normalize(r.keyword) === kw);
+  if (existing) {
+    const { error } = await sb.from('rules').update({ category }).eq('id', existing.id);
+    if (error) return { error };
+    state.rules = state.rules.map(r => (r.id === existing.id ? { ...r, category } : r));
+    return { updated: true };
+  }
+  const { data, error } = await sb.from('rules').insert({ keyword: kw, category }).select('id,keyword,category').single();
+  if (error) return { error };
+  state.rules = [...state.rules, data];
+  return { created: true };
+}
+
 async function addRule() {
   const kw = L.normalize(document.getElementById('new-kw').value);
   const cat = document.getElementById('new-cat').value;
   if (!kw) return toast('Escreva uma palavra para a regra.');
-  const { data, error } = await sb.from('rules').insert({ keyword: kw, category: cat }).select('id,keyword,category').single();
-  if (error) return toast('Não salvou: ' + error.message);
-  state.rules.push(data); render(); toast('Regra adicionada.');
+  const res = await upsertRule(kw, cat);
+  if (res.error) return toast('Não salvou: ' + res.error.message);
+  render(); toast(res.updated ? `A regra "${kw}" já existia: agora vai para ${cat}.` : 'Regra adicionada.');
 }
 
 async function updateRule(id, patch) {
@@ -1546,7 +1470,7 @@ async function updateRule(id, patch) {
   const { error } = await sb.from('rules').update(patch).eq('id', id);
   if (error) return toast('Não salvou: ' + error.message);
   const r = state.rules.find(x => x.id === id);
-  if (r) Object.assign(r, patch);
+  if (r) state.rules = state.rules.map(x => (x.id === id ? { ...x, ...patch } : x));
   toast('Regra atualizada.');
 }
 
@@ -1622,7 +1546,7 @@ function pickFile() {
     if (f.size > 15e6) return toast('Arquivo grande demais para uma fatura.');
     let text;
     try {
-      if (/\.xlsx$/i.test(f.name)) { const X = await import('./xlsx.js?v=20261117q'); text = await X.xlsxToCSV(await f.arrayBuffer()); }
+      if (/\.xlsx$/i.test(f.name)) { const X = await import('./xlsx.js?v=20261118a'); text = await X.xlsxToCSV(await f.arrayBuffer()); }
       else if (/\.xls$/i.test(f.name)) return toast('Arquivo .xls antigo: abra no Excel e salve como .xlsx ou CSV.');
       else text = await f.text();
     } catch (err) { return toast('Não consegui ler o arquivo: ' + (err.message || err)); }
@@ -1820,7 +1744,7 @@ function txSheet(id) {
     sh.$('[data-reset]')?.addEventListener('click', async () => {
       const { error } = await sb.from('transactions').update({ category: null }).eq('id', t.id);
       if (error) { err.textContent = 'Não salvou: ' + error.message; return; }
-      t.category = null; close(); render();
+      setTx(t.id, { category: null }); close(); render();
     });
     sh.$('[data-delete]')?.addEventListener('click', async () => {
       const { error } = await sb.from('transactions').delete().eq('id', t.id);
@@ -1834,46 +1758,16 @@ function txSheet(id) {
       if (asRule) {
         if (!kw) { err.textContent = 'Escreva a palavra da regra.'; return; }
         if (!L.normalize(t.title).includes(kw)) { err.textContent = 'A palavra precisa aparecer na descrição da compra.'; return; }
-        const { data, error } = await sb.from('rules').insert({ keyword: kw, category: chosen }).select('id,keyword,category').single();
-        if (error) { err.textContent = 'Não salvou: ' + error.message; return; }
-        state.rules.push(data);
-        if (t.category) { await sb.from('transactions').update({ category: null }).eq('id', t.id); t.category = null; }
+        const res = await upsertRule(kw, chosen);
+        if (res.error) { err.textContent = 'Não salvou: ' + res.error.message; return; }
+        if (t.category) { await sb.from('transactions').update({ category: null }).eq('id', t.id); setTx(t.id, { category: null }); }
         toast(`Regra criada: "${kw}" → ${chosen}.`);
       } else {
         const { error } = await sb.from('transactions').update({ category: chosen }).eq('id', t.id);
         if (error) { err.textContent = 'Não salvou: ' + error.message; return; }
-        t.category = chosen; toast('Categoria alterada.');
+        setTx(t.id, { category: chosen }); toast('Categoria alterada.');
       }
       close(); render();
-    });
-  });
-}
-
-// ----- Sugerir tetos -----
-function suggestSheet() {
-  const { cycles, avg } = L.averageByCategory({ txs: state.txs, rules: state.rules, settings: state.settings, incomes: state.incomes, today: today() });
-  if (!cycles.length) return toast('Ainda não há ciclo fechado com compras para calcular a média.');
-  const cats = (state.draft || state.settings).categories;
-  let cut = 0;
-  const sug = v => Math.max(0, Math.ceil((v * (1 - cut)) / 10) * 10);
-  const rows = () => cats.filter(c => !c.fixed).map(c => {
-    const a = avg[c.name] || 0, n = sug(a);
-    return `<div class="list-row"><span class="mn"><span>${esc(c.name)}</span><small>média ${money(a)} · hoje ${money(c.budget)}</small></span><b>${money(n)}</b></div>`;
-  }).join('');
-  const html = `<h2>Sugerir tetos</h2>
-    <div class="meta">Média do gasto variável (sem fixos) em ${cycles.length} ${cycles.length === 1 ? 'ciclo fechado' : 'ciclos fechados'}: ${cycles.map(c => L.dayMonth(c.start)).reverse().join(', ')}.</div>
-    <div class="seg" role="group" aria-label="Quanto cortar" style="display:inline-flex;margin:10px 0 4px">
-      ${[[0, 'Média'], [0.1, '−10%'], [0.2, '−20%'], [0.3, '−30%']].map(([v, l]) => `<button data-cut="${v}" aria-pressed="${v === 0}">${l}</button>`).join('')}
-    </div>
-    <div data-rows>${rows()}</div>
-    <p class="help small">Rubricas marcadas como fixas ficam como estão. Nada muda até você tocar em Salvar ajustes.</p>
-    <div class="actions"><button class="btn primary grow" data-apply>Usar estes tetos</button><button class="btn ghost" data-close>Cancelar</button></div>`;
-  openSheet(html, (sh, close) => {
-    pickChips(sh, 'cut', v => { cut = Number(v); sh.$('[data-rows]').innerHTML = rows(); });
-    sh.$('[data-apply]').addEventListener('click', () => {
-      if (!state.draft) startDraft();
-      for (const c of state.draft.categories) if (!c.fixed) c.budget = sug(avg[c.name] || 0);
-      close(); render(); toast('Tetos preenchidos. Confira e toque em Salvar ajustes.');
     });
   });
 }
