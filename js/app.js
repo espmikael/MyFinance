@@ -1,5 +1,5 @@
-import * as L from './logic.js?v=20261118a';
-import { SUPABASE_URL, SUPABASE_ANON_KEY } from './config.js?v=20261118a';
+import * as L from './logic.js?v=20261118b';
+import { SUPABASE_URL, SUPABASE_ANON_KEY } from './config.js?v=20261118b';
 
 const $app = document.getElementById('app');
 const $toast = document.getElementById('toast');
@@ -496,38 +496,40 @@ function weekHero(s) {
   }
   const over = w.left < 0;
   const up = lastUploadDay();
-  // modo contenção: o mês já foi; até o fechamento, separa o essencial (cabe na média) do resto (meta: zero)
-  if (w.containment) {
-    const cz = s.containment, ess = new Set(cz.cats);
-    const wk = s.txs.filter(t => t.day >= w.start && t.day <= w.end && !t.isFixed && !t.commit && t.cat !== L.IGNORE && t.amount > 0);
-    const essSpent = wk.filter(t => ess.has(t.cat)).reduce((a, t) => a + t.amount, 0);
-    const other = wk.filter(t => !ess.has(t.cat)).reduce((a, t) => a + t.amount, 0);
-    const essLeft = w.limit - essSpent;
-    const names = cz.cats.length ? cz.cats.join(' e ').toLowerCase() : 'o essencial';
-    return `<div class="kcard hero week contain">
-      <span class="r1"><span class="kl">Até ${L.ddmm(s.cycle.end)}: só o essencial</span><span class="kl" style="opacity:.9">${L.ddmm(w.start)}–${L.ddmm(w.end)}</span></span>
-      <span class="kv">${money(Math.max(0, essLeft))}</span>
-      <span class="ks">para ${esc(names)} nesta semana · gastou ${money(essSpent)} de ~${money(w.limit)}${cz.fromAvg ? ' (sua média)' : ''}</span>
-      <div class="wprog" aria-hidden="true"><i style="width:${w.limit > 0 ? Math.min(100, Math.round(essSpent / w.limit * 100)) : 100}%"></i></div>
-      <div class="wfoot">
-        <span><span>Fora do essencial nesta semana <small>(meta: R$ 0)</small></span><b class="${other > 0 ? 'neg-on' : ''}">${money(other)}</b></span>
-        <span><span>Faturas enviadas até</span><b>${up ? `${L.weekdayShort(up)} ${L.ddmm(up)}` : '—'}</b></span>
-      </div>
+  const t = today();
+  const endTxt = L.weekdayShort(w.end) === 'dom' ? 'domingo' : `${L.weekdayShort(w.end)} ${L.ddmm(w.end)}`;
+  const short = v => state.priv ? '•••' : Math.round(v).toLocaleString('pt-BR');
+  const perDay = over ? 0 : w.perDay;
+  const names = ['dom', 'seg', 'ter', 'qua', 'qui', 'sex', 'sáb'];
+  // um quadradinho por dia: os que passaram mostram o gasto; hoje e os que faltam, quanto cabe por dia
+  const days = w.days7.map(d => {
+    const past = d.date < t, isToday = d.date === t;
+    const lbl = isToday ? 'hoje' : names[new Date(d.date + 'T12:00:00').getDay()];
+    return `<span class="wday ${past ? 'past' : ''} ${isToday ? 'today' : ''}"><small>${lbl}</small><b>${past ? short(d.value) : short(perDay)}</b></span>`;
+  }).join('');
+  const left = w.daysLeft || 1;
+  return `<div class="kcard hero week e ${over ? 'zero' : ''}">
+      <span class="r1"><span class="kl">${over ? 'Passou do teto desta semana' : `Ainda pode gastar até ${endTxt}`}</span>${w.containment ? `<button class="tagbtn" data-act="teto-info">teto reduzido ›</button>` : `<button class="tagbtn plain" data-act="teto-info" aria-label="Como o teto é calculado">${L.ddmm(w.start)}–${L.ddmm(w.end)}</button>`}</span>
+      <span class="kv">${money(Math.abs(w.left))}</span>
+      <span class="ks">teto da semana ${money(w.limit)} · usado ${money(w.spent)}</span>
+      <div class="wdays" style="grid-template-columns:repeat(${w.days7.length},minmax(0,1fr))" aria-label="Gasto e quanto cabe por dia">${days}</div>
+      <span class="ks sm">${over ? `Até ${endTxt}, o ideal é não gastar mais nada` : `${money(perDay)} por dia ${left === 1 ? 'hoje' : `nos ${left} dias que faltam`}`} · faturas enviadas até ${up ? `${L.weekdayShort(up)} ${L.ddmm(up)}` : '—'}</span>
     </div>`;
-  }
-  // uma pergunta só: quanto ainda posso gastar nesta semana
-  const cz = null;
-  const pct = w.limit > 0 ? Math.min(100, Math.round(w.spent / w.limit * 100)) : 100;
-  const range = `${L.weekdayShort(w.start)} ${L.ddmm(w.start)} a ${L.weekdayShort(w.end)} ${L.ddmm(w.end)}`;
-  return `<div class="kcard hero week ${over ? 'zero' : ''}">
-      <span class="r1"><span class="kl">Pode gastar nesta semana</span><span class="kl" style="opacity:.9">${range}</span></span>
-      <span class="kv">${money(Math.max(0, w.left))}</span>
-      <div class="wprog" aria-hidden="true"><i style="width:${pct}%"></i></div>
-      <span class="ks">gastou ${money(w.spent)} de ${money(w.limit)}${over ? ` · <b>passou ${money(-w.left)}</b>, que sai da próxima semana` : !over && w.daysLeft > 1 ? ` · ${money(w.perDay)} por dia até ${L.weekdayShort(w.end) === 'dom' ? 'domingo' : L.ddmm(w.end)}` : ''}</span>
-      <div class="wfoot">
-        <span><span>Faturas enviadas até</span><b>${up ? `${L.weekdayShort(up)} ${L.ddmm(up)}` : '—'}</b></span>
-      </div>
-    </div>`;
+}
+
+// como o teto da semana é calculado (abre ao tocar na etiqueta do card)
+function tetoSheet() {
+  const s = summary(curCycle()), w = s.week;
+  if (!w) return;
+  const cz = w.containment ? s.containment : null;
+  const html = `<div class="head"><h2>Como o teto é calculado</h2></div>
+    ${cz ? `<p>O dia a dia do mês já passou do limite (${money(s.freeSpent)} de ${money(s.freeBudget)}). Até a fatura fechar em ${L.ddmm(s.cycle.end)}, o teto de cada semana cobre só o essencial: a sua média de <b>${esc(cz.cats.join(' e ') || 'rubricas essenciais')}</b>${cz.fromAvg ? '' : ' (estimada, até haver um ciclo fechado)'}, proporcional aos dias.</p>
+      <p class="small muted">Você escolhe o que é essencial em Ajustes › Rubricas. No próximo ciclo o teto volta ao normal.</p>`
+    : `<p>No começo de cada semana, o que resta do limite do dia a dia do mês é dividido pelos dias que faltam até a fatura fechar (${L.ddmm(s.cycle.end)}). A semana recebe a parte dos dias dela.</p>
+      <p>O que uma semana passa sai das seguintes; o que sobra, vai para elas.</p>
+      <p class="small muted">Limite do dia a dia: ${money(s.freeBudget)} · já usado no mês: ${money(s.freeSpent)}. Parcelas e assinaturas do cartão ficam fora da semana.</p>`}
+    <div class="actions"><button class="btn primary grow" data-close>Entendi</button></div>`;
+  openSheet(html);
 }
 
 function homeNumbers(s) {
@@ -1322,6 +1324,7 @@ document.addEventListener('click', async e => {
     case 'home-card': state.homeCard = el.dataset.v; { const y = window.scrollY; render(); window.scrollTo(0, y); } return;
     case 'home-tab': state.homeTab = el.dataset.v; { const y = window.scrollY; render(); window.scrollTo(0, y); } return;
     case 'balance': return balanceSheet();
+    case 'teto-info': return tetoSheet();
     case 'lock-on': return enableLock();
     case 'lock-off': setLockCfg(null); render(); return toast('Face ID desativado neste aparelho.');
     case 'lock-relock': { const c = lockCfg(); if (c) { c.relock = Number(el.dataset.v); setLockCfg(c); } const y = window.scrollY; render(); window.scrollTo(0, y); return; }
@@ -1546,7 +1549,7 @@ function pickFile() {
     if (f.size > 15e6) return toast('Arquivo grande demais para uma fatura.');
     let text;
     try {
-      if (/\.xlsx$/i.test(f.name)) { const X = await import('./xlsx.js?v=20261118a'); text = await X.xlsxToCSV(await f.arrayBuffer()); }
+      if (/\.xlsx$/i.test(f.name)) { const X = await import('./xlsx.js?v=20261118b'); text = await X.xlsxToCSV(await f.arrayBuffer()); }
       else if (/\.xls$/i.test(f.name)) return toast('Arquivo .xls antigo: abra no Excel e salve como .xlsx ou CSV.');
       else text = await f.text();
     } catch (err) { return toast('Não consegui ler o arquivo: ' + (err.message || err)); }

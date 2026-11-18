@@ -645,7 +645,8 @@ export function summarize({ txs, rules, settings, cycle, today, incomes = [], av
     const perDayEss = essAvg > 0 ? essAvg / totalDays : freeBudget / totalDays * 0.5;
     containment = { cats: essCats, perWeek: round(perDayEss * 7), fromAvg: essAvg > 0 };
     for (const w of weeks) {
-      if (w.status === 'past') continue;
+      // semanas passadas que já não tinham nada liberado também passam a ser medidas pelo essencial
+      if (w.status === 'past' && w.limit >= perDayEss * w.days) continue;
       w.limit = round(perDayEss * w.days); w.left = round(w.limit - w.spent); w.containment = true;
       if (w.status === 'now') w.perDay = round(Math.max(0, w.left) / w.daysLeft);
     }

@@ -535,3 +535,22 @@ button.slim .go { margin-left: auto; font-weight: 700; } button.slim .dot { widt
 .lockscreen { display: flex; flex-direction: column; }
 .icon-btn.cur { background: var(--brand-soft); border-color: var(--brand-line); color: var(--brand-text); }
 .chart svg[data-chart] { touch-action: pan-y; }
+
+/* ---- card da semana (opção E) ---- */
+.kcard.hero.week.e { gap: 10px; }
+.kcard.hero.week.e .r1 { align-items: center; }
+.tagbtn { font: inherit; font-size: 12px; font-weight: 700; padding: 4px 10px; border-radius: 999px; border: 0; cursor: pointer; background: rgba(0, 0, 0, .16); color: inherit; white-space: nowrap; }
+.tagbtn.plain { background: transparent; font-weight: 600; opacity: .9; padding: 4px 0; }
+.wdays { display: grid; gap: 5px; margin-top: 2px; }
+.wday { display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 8px 0; border-radius: 10px; background: rgba(255, 255, 255, .16); min-width: 0; }
+.wday small { font-size: 11.5px; opacity: .9; } .wday b { font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.wday.past { background: rgba(0, 0, 0, .14); } .wday.past small, .wday.past b { opacity: .7; }
+.wday.today { background: rgba(255, 255, 255, .32); } .wday.today small { font-weight: 700; opacity: 1; }
+.kcard.hero.week.e .ks.sm { font-size: 12.5px; opacity: .88; }
+.kcard.hero.zero .wday { background: var(--surface); } .kcard.hero.zero .wday.past { background: var(--over-line); }
+.kcard.hero.zero .wday.past b { color: var(--over); opacity: 1; } .kcard.hero.zero .tagbtn { background: var(--over-line); }
+:root[data-theme="dark"] .kcard.hero:not(.zero) .wday { background: rgba(0, 0, 0, .12); } :root[data-theme="dark"] .kcard.hero:not(.zero) .wday.past { background: rgba(0, 0, 0, .25); } :root[data-theme="dark"] .kcard.hero:not(.zero) .wday.today { background: rgba(255, 255, 255, .35); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .kcard.hero:not(.zero) .wday { background: rgba(0, 0, 0, .12); } :root:not([data-theme="light"]) .kcard.hero:not(.zero) .wday.past { background: rgba(0, 0, 0, .25); } :root:not([data-theme="light"]) .kcard.hero:not(.zero) .wday.today { background: rgba(255, 255, 255, .35); } }
+@media (min-width: 900px) { .kgrid:has(.kcard.hero.week.e) { grid-template-columns: minmax(380px, 1.6fr) repeat(3, minmax(0, 1fr)); } }
+@media (min-width: 900px) and (max-width: 1180px) { .kgrid:has(.kcard.hero.week.e) { grid-template-columns: minmax(360px, 1.4fr) repeat(2, minmax(0, 1fr)); } }
+@media (min-width: 900px) { .kgrid .kcard:not(.hero) .kv { font-size: clamp(22px, 2.1vw, 30px); white-space: nowrap; } }
