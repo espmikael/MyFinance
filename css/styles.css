@@ -554,3 +554,52 @@ button.slim .go { margin-left: auto; font-weight: 700; } button.slim .dot { widt
 @media (min-width: 900px) { .kgrid:has(.kcard.hero.week.e) { grid-template-columns: minmax(380px, 1.6fr) repeat(3, minmax(0, 1fr)); } }
 @media (min-width: 900px) and (max-width: 1180px) { .kgrid:has(.kcard.hero.week.e) { grid-template-columns: minmax(360px, 1.4fr) repeat(2, minmax(0, 1fr)); } }
 @media (min-width: 900px) { .kgrid .kcard:not(.hero) .kv { font-size: clamp(22px, 2.1vw, 30px); white-space: nowrap; } }
+
+/* ================= tema claro, revisão (referência: make-interfaces-feel-better) =================
+   Elevação com sombra em camadas no lugar de borda (borda só para estrutura e estado),
+   um elemento forte só (o card da semana em tinta), cinzas com mais contraste. O escuro não muda. */
+:root {
+  --bg: #ECEEF2; --raise: #F4F5F8; --line: #E1E4EA; --line-soft: #ECEEF2;
+  --text: #121318; --text-2: #343944; --muted: #535A67; --faint: #777E8A;
+  --r: 20px;
+  --card-bd: transparent;
+  --elev: 0 0 0 1px rgb(17 19 28 / .05), 0 1px 2px rgb(17 19 28 / .05), 0 8px 20px -10px rgb(17 19 28 / .10);
+  --ink: #211D3B; --ink-fg: #FFFFFF; --ink-over: #FF9296;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --card-bd: var(--line); --elev: none; --ink: var(--brand); --ink-fg: var(--on-brand); --ink-over: var(--over); } }
+:root[data-theme="dark"] { --card-bd: var(--line); --elev: none; --ink: var(--brand); --ink-fg: var(--on-brand); --ink-over: var(--over); }
+
+.card, .kcard, .invtab, .avc, button.kcard { border-color: var(--card-bd); box-shadow: var(--elev); }
+.invtab[aria-pressed="true"] { box-shadow: 0 0 0 1.5px var(--brand), var(--elev); border-color: transparent; background: var(--surface); }
+.invtab[aria-pressed="true"][style*="--cc"] { box-shadow: 0 0 0 1.5px var(--cc), var(--elev); }
+.btn { border-color: var(--card-bd); box-shadow: var(--elev); } .btn.primary, .btn.ghost, .btn.danger { box-shadow: none; }
+.icon-btn { box-shadow: var(--elev); border-color: var(--card-bd); }
+h1, h2, .page-title { text-wrap: balance; } p, .help, .ks { text-wrap: pretty; }
+.kv, .invtab b, .wday b, .lrow .r b, .tx .v { font-variant-numeric: tabular-nums; }
+
+/* toque: encolhe um pouco, nunca abaixo de .95; transição só do que muda */
+.btn, .icon-btn, .invtab, .chip, .tabs button, .tagbtn, button.kcard, .avc, .row { transition: transform 120ms ease-out, background-color 150ms ease-out, box-shadow 150ms ease-out; }
+.btn:active, .icon-btn:active, .invtab:active, .chip:active, .tagbtn:active, button.kcard:active, .avc:active { transform: scale(.97); }
+@media (prefers-reduced-motion: reduce) { .btn, .icon-btn, .invtab, .chip, .tabs button, .tagbtn, button.kcard, .avc, .row { transition: none; } .btn:active, .icon-btn:active, .invtab:active, .chip:active, .tagbtn:active, button.kcard:active, .avc:active { transform: none; } }
+
+/* card da semana: bloco tinta no claro (no escuro segue o roxo de antes) */
+.kcard.hero { background: var(--ink); color: var(--ink-fg); box-shadow: var(--elev); border-color: transparent; }
+.kcard.hero.zero { background: var(--ink); color: var(--ink-fg); border-color: transparent; }
+.kcard.hero.zero .kv { color: var(--ink-over); }
+.kcard.hero.zero .kl:first-child { color: var(--ink-over); opacity: 1; }
+.kcard.hero.zero .wday { background: rgba(255, 255, 255, .07); }
+.kcard.hero.zero .wday.past { background: rgba(255, 146, 150, .16); } .kcard.hero.zero .wday.past b { color: var(--ink-over); }
+.kcard.hero.zero .tagbtn { background: rgba(255, 255, 255, .12); color: inherit; }
+.kcard.hero .wday { border-radius: 12px; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .kcard.hero.zero { background: var(--over-soft); color: var(--over); border-color: var(--over-line); } :root:not([data-theme="light"]) .kcard.hero.zero .wday { background: var(--surface); } :root:not([data-theme="light"]) .kcard.hero.zero .wday.past { background: var(--over-line); } :root:not([data-theme="light"]) .kcard.hero.zero .tagbtn { background: var(--over-line); } }
+:root[data-theme="dark"] .kcard.hero.zero { background: var(--over-soft); color: var(--over); border-color: var(--over-line); } :root[data-theme="dark"] .kcard.hero.zero .wday { background: var(--surface); } :root[data-theme="dark"] .kcard.hero.zero .wday.past { background: var(--over-line); } :root[data-theme="dark"] .kcard.hero.zero .tagbtn { background: var(--over-line); }
+
+/* cards menores do resumo: rótulo discreto, número firme */
+.kcard:not(.hero) .kl { font-size: 13.5px; color: var(--muted); }
+.kcard:not(.hero) .ks { color: var(--muted); }
+
+/* PC: usa melhor a largura */
+@media (min-width: 900px) { .wrap { max-width: 1320px; } }
+
+/* barra lateral e abas: superfície limpa, sem moldura pesada */
+.side { box-shadow: 1px 0 0 var(--line); border-right-color: transparent; }
