@@ -1,5 +1,5 @@
-import * as L from './logic.js?v=20261118b';
-import { SUPABASE_URL, SUPABASE_ANON_KEY } from './config.js?v=20261118b';
+import * as L from './logic.js?v=20261119a';
+import { SUPABASE_URL, SUPABASE_ANON_KEY } from './config.js?v=20261119a';
 
 const $app = document.getElementById('app');
 const $toast = document.getElementById('toast');
@@ -236,8 +236,9 @@ let navDepth = 0;
 const sheets = [];   // janelas abertas (a de cima é a última)
 function go(v, { filter = 'all', cycle = null } = {}) {
   v = ALIAS[v] || v;
-  if (['ajustes', 'entradas'].includes(v) && !['ajustes', 'entradas'].includes(state.view)) startDraft();
-  if (!['ajustes', 'entradas'].includes(v)) state.draft = null;
+  // o rascunho de Ajustes sobrevive a uma ida às Regras e volta
+  if (['ajustes', 'entradas'].includes(v) && !['ajustes', 'entradas', 'regras'].includes(state.view)) startDraft();
+  if (!['ajustes', 'entradas', 'regras'].includes(v)) state.draft = null;
   if (cycle) state.cycle = cycle;
   state.view = v; state.filter = filter; state.q = '';
   navDepth++;
@@ -257,8 +258,8 @@ window.addEventListener('popstate', e => {
   }
   navDepth = Math.max(0, navDepth - 1);
   const st = e.state || { v: 'home', f: 'all' };
-  if (['ajustes', 'entradas'].includes(st.v) && !['ajustes', 'entradas'].includes(state.view)) startDraft();
-  if (!['ajustes', 'entradas'].includes(st.v)) state.draft = null;
+  if (['ajustes', 'entradas'].includes(st.v) && !['ajustes', 'entradas', 'regras'].includes(state.view)) startDraft();
+  if (!['ajustes', 'entradas', 'regras'].includes(st.v)) state.draft = null;
   state.view = ALIAS[st.v] || st.v || 'home'; state.filter = st.f || 'all'; state.q = '';
   render(); window.scrollTo(0, 0);
 });
@@ -298,9 +299,9 @@ function render() {
   const s = summary(state.view === 'home' ? curCycle() : state.cycle);
   const body = {
     home: () => viewHome(s), gastos: () => viewGastos(s), analise: () => viewAnalise(s), mes: viewMes,
-    reservas: viewReservas, ajustes: viewAjustes, entradas: viewEntradas,
+    reservas: viewReservas, ajustes: viewAjustes, entradas: viewEntradas, regras: viewRegras,
   }[state.view]();
-  const cur = state.view === 'entradas' ? 'mes' : state.view;
+  const cur = state.view === 'entradas' ? 'mes' : state.view === 'regras' ? 'ajustes' : state.view;
   const nav = ([id, l, ic]) => `<button class="navlink" data-act="view" data-v="${id}" ${cur === id ? 'aria-current="page"' : ''}>${icon(ic)}${l}</button>`;
   const unc = id => id === 'gastos' && s.toClassify && s.toClassify.length && state.view !== 'gastos' ? `<span class="badge" aria-label="${s.toClassify.length} sem rubrica">${s.toClassify.length}</span>` : '';
   const tab = ([id, l, ic]) => `<button data-act="view" data-v="${id}" ${cur === id ? 'aria-current="page"' : ''}><span class="tabic">${icon(ic, 22)}${unc(id)}</span>${l}</button>`;
@@ -346,7 +347,7 @@ function headActions({ upload = true } = {}) {
     ${upload ? `<button class="btn only-desk-inline" data-act="upload" ${state.busy ? 'disabled' : ''}>${state.busy ? 'Enviando…' : 'Enviar fatura'}</button>
     <button class="icon-btn only-mob" data-act="upload" aria-label="Enviar fatura">${icon('up')}</button>` : ''}
     <button class="btn primary only-desk-inline" data-act="lancar">${icon('plus', 16, 2.4)}Lançar</button>
-    <button class="icon-btn only-mob ${['reservas', 'ajustes', 'entradas'].includes(state.view) ? 'cur' : ''}" data-act="menu" aria-label="Mais opções" ${['reservas', 'ajustes'].includes(state.view) ? 'aria-current="page"' : ''}>${icon('more', 20)}</button>
+    <button class="icon-btn only-mob ${['reservas', 'ajustes', 'entradas', 'regras'].includes(state.view) ? 'cur' : ''}" data-act="menu" aria-label="Mais opções" ${['reservas', 'ajustes', 'regras'].includes(state.view) ? 'aria-current="page"' : ''}>${icon('more', 20)}</button>
   </div>`;
 }
 const pageHead = (title, sub, actions = headActions(), cls = '') => `<header class="pagehead ${cls}"><div class="t">${state.view !== 'home' ? `<button class="backbtn" data-act="back" aria-label="Voltar">‹ Voltar</button>` : ''}<h1 class="page-title">${title}</h1>${sub ? `<span class="sub">${sub}</span>` : ''}</div>${actions}</header>`;
@@ -1135,11 +1136,6 @@ function viewAjustes() {
       <label class="check" title="Entra no modo contenção"><input type="checkbox" data-bind="categories.${i}.essential" data-type="bool" ${c.essential ? 'checked' : ''}> essencial</label>
       <button class="icon-btn sm" data-act="del" data-path="categories" data-i="${i}" aria-label="Remover rubrica">×</button></div>`).join('');
   const options = sel => [...catNames(), L.IGNORE].map(n => `<option ${n === sel ? 'selected' : ''}>${esc(n)}</option>`).join('');
-  const rules = [...state.rules].sort((a, b) => a.category.localeCompare(b.category) || a.keyword.localeCompare(b.keyword))
-    .map(r => `<div class="edit-row rule">
-      <input class="input" data-rule-kw="${r.id}" value="${esc(r.keyword)}" aria-label="Palavra da regra">
-      <select class="input" data-rule-cat="${r.id}" aria-label="Rubrica da regra">${options(r.category)}</select>
-      <button class="icon-btn sm" data-act="del-rule" data-id="${r.id}" aria-label="Apagar regra">×</button></div>`).join('');
   const theme = document.documentElement.dataset.theme || 'auto';
   return `${pageHead('Ajustes', esc(state.user.email), headActions({ upload: false }))}
     <section class="card">
@@ -1172,14 +1168,10 @@ function viewAjustes() {
       <div class="actions"><button class="btn primary" data-act="save-draft">Salvar ajustes</button></div>
     </section>
     <section class="card">
-      <div class="card-head"><h2>Regras: como o app reconhece as compras</h2><span class="sub">${state.rules.length} regras</span></div>
-      <p class="help">Se a descrição da compra tem a palavra, ela vai para a rubrica. A palavra mais específica vence. Toda vez que você classifica uma compra com "Lembrar para as próximas", uma regra nova aparece aqui. Edite a palavra ou a rubrica e a mudança vale na hora, inclusive para as compras antigas.</p>
-      <div class="edit-row rule">
-        <input class="input" id="new-kw" placeholder="nova palavra, ex.: padaria" aria-label="Palavra">
-        <select class="input" id="new-cat" aria-label="Rubrica">${options(catNames()[0])}</select>
-        <button class="icon-btn sm" data-act="add-rule" aria-label="Adicionar regra" style="background:var(--brand);color:var(--on-brand);border-color:var(--brand)">+</button>
-      </div>
-      <div style="margin-top:6px">${rules}</div>
+      <button class="row" data-act="view" data-v="regras" style="border-top:0;padding-top:0">
+        <span><b>Regras de classificação</b><small class="muted" style="display:block;font-weight:400;margin-top:2px">palavra da compra → rubrica · ${state.rules.length} regras</small></span>
+        <span class="end">›</span>
+      </button>
     </section>
     <section class="card">
       <div class="card-head"><h2>Envios de fatura</h2><span class="sub">os mais recentes</span></div>
@@ -1220,6 +1212,35 @@ function incomeRef(it, ym) {
   if (r && Number(r.monthOffset) === 1) return `restante da folha de ${M}`;
   if (r && /vintena|adiant/i.test(r.name)) return `adiantamento da folha de ${M}`;
   return `referente a ${M}`;
+}
+
+// ----- Regras de classificação (sub-tela de Ajustes) -----
+function viewRegras() {
+  const options = sel => [...catNames(), L.IGNORE].map(n => `<option ${n === sel ? 'selected' : ''}>${esc(n)}</option>`).join('');
+  const groups = {};
+  for (const r of state.rules) (groups[r.category] ||= []).push(r);
+  const order = [...catNames(), L.IGNORE].filter(c => groups[c]).concat(Object.keys(groups).filter(c => ![...catNames(), L.IGNORE].includes(c)));
+  const list = order.map(c => `<div class="rgroup" data-group>
+      <div class="grp-h"><span>${esc(c)}</span><span>${groups[c].length}</span></div>
+      ${groups[c].sort((a, b) => a.keyword.localeCompare(b.keyword)).map(r => `<div class="edit-row rule" data-kw="${esc(L.normalize(r.keyword))}">
+        <input class="input" data-rule-kw="${r.id}" value="${esc(r.keyword)}" aria-label="Palavra da regra">
+        <select class="input" data-rule-cat="${r.id}" aria-label="Rubrica da regra">${options(r.category)}</select>
+        <button class="icon-btn sm" data-act="del-rule" data-id="${r.id}" aria-label="Apagar regra">×</button></div>`).join('')}
+    </div>`).join('');
+  return `${pageHead('Regras', `${state.rules.length} regras · palavra da compra → rubrica`, headActions({ upload: false }))}
+    <section class="card">
+      <p class="help" style="margin-top:0">Se a descrição da compra tem a palavra, ela vai para a rubrica. A palavra mais específica vence. Ao classificar uma compra com "Lembrar para as próximas", a regra aparece aqui. Mudanças valem na hora, inclusive para as compras antigas.</p>
+      <div class="edit-row rule">
+        <input class="input" id="new-kw" placeholder="nova palavra, ex.: padaria" aria-label="Palavra">
+        <select class="input" id="new-cat" aria-label="Rubrica">${options(catNames()[0])}</select>
+        <button class="icon-btn sm" data-act="add-rule" aria-label="Adicionar regra" style="background:var(--brand);color:var(--on-brand);border-color:var(--brand)">+</button>
+      </div>
+    </section>
+    <section class="card">
+      <label class="search" style="margin:0 0 6px"><span aria-hidden="true">${icon('search', 18)}</span><input type="search" id="rule-q" placeholder="Buscar palavra" aria-label="Buscar regra"></label>
+      <div id="rule-list">${list || '<p class="help">Nenhuma regra ainda.</p>'}</div>
+      <p class="help" id="rule-none" hidden>Nenhuma regra com essa palavra.</p>
+    </section>`;
 }
 
 function viewEntradas() {
@@ -1389,6 +1410,18 @@ async function payFixed(i, ym) {
 
 // edição dos ajustes: cada campo escreve direto no rascunho
 document.addEventListener('input', e => {
+  if (e.target.id === 'rule-q') {
+    const q = L.normalize(e.target.value);
+    let any = false;
+    document.querySelectorAll('#rule-list [data-group]').forEach(g => {
+      let n = 0;
+      g.querySelectorAll('.edit-row.rule').forEach(r => { const on = !q || r.dataset.kw.includes(q); r.hidden = !on; if (on) n++; });
+      g.hidden = n === 0; if (n) any = true;
+      const cnt = g.querySelector('.grp-h span:last-child'); if (cnt) cnt.textContent = n;
+    });
+    const none = document.getElementById('rule-none'); if (none) none.hidden = any;
+    return;
+  }
   if (e.target.id === 'gq') { state.q = e.target.value; const box = document.getElementById('txlist'); if (box) box.innerHTML = gastosList(summary(state.cycle)); return; }
   bindInput(e.target);
 });
@@ -1549,7 +1582,7 @@ function pickFile() {
     if (f.size > 15e6) return toast('Arquivo grande demais para uma fatura.');
     let text;
     try {
-      if (/\.xlsx$/i.test(f.name)) { const X = await import('./xlsx.js?v=20261118b'); text = await X.xlsxToCSV(await f.arrayBuffer()); }
+      if (/\.xlsx$/i.test(f.name)) { const X = await import('./xlsx.js?v=20261119a'); text = await X.xlsxToCSV(await f.arrayBuffer()); }
       else if (/\.xls$/i.test(f.name)) return toast('Arquivo .xls antigo: abra no Excel e salve como .xlsx ou CSV.');
       else text = await f.text();
     } catch (err) { return toast('Não consegui ler o arquivo: ' + (err.message || err)); }
