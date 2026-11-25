@@ -1,5 +1,5 @@
-import * as L from './logic.js?v=20261125c';
-import { SUPABASE_URL, SUPABASE_ANON_KEY } from './config.js?v=20261125c';
+import * as L from './logic.js?v=20261125d';
+import { SUPABASE_URL, SUPABASE_ANON_KEY } from './config.js?v=20261125d';
 
 const $app = document.getElementById('app');
 const $toast = document.getElementById('toast');
@@ -142,7 +142,15 @@ async function boot() {
       <p>Não consegui carregar o app. Recarregue a página.</p></div></div>`;
     return;
   }
-  sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, { auth: { persistSession: true, autoRefreshToken: true } });
+  // trava da sessão entre abas/janelas: espera no máximo 5 s. A padrão espera para sempre, e uma janela
+// do app parada no meio de renovar o login deixava todas as outras (app e navegador) em tela vazia.
+  const lock = async (name, _t, fn) => {
+    if (!navigator.locks) return fn();
+    const ac = new AbortController(), timer = setTimeout(() => ac.abort(), 5000);
+    try { return await navigator.locks.request(name, { mode: 'exclusive', signal: ac.signal }, async () => { clearTimeout(timer); return fn(); }); }
+    catch (e) { if (e && e.name === 'AbortError') return fn(); throw e; }
+  };
+  sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, { auth: { persistSession: true, autoRefreshToken: true, lock } });
   // link do e-mail de recuperação: o Supabase devolve type=recovery (ou um erro, se o link venceu)
   const urlInfo = new URLSearchParams((location.hash || '').replace(/^#/, '') + '&' + location.search.replace(/^\?/, ''));
   const isRecovery = urlInfo.get('type') === 'recovery';
@@ -1781,7 +1789,7 @@ function pickFile() {
     if (f.size > 15e6) return toast('Arquivo grande demais para uma fatura.');
     let text;
     try {
-      if (/\.xlsx$/i.test(f.name)) { const X = await import('./xlsx.js?v=20261125c'); text = await X.xlsxToCSV(await f.arrayBuffer()); }
+      if (/\.xlsx$/i.test(f.name)) { const X = await import('./xlsx.js?v=20261125d'); text = await X.xlsxToCSV(await f.arrayBuffer()); }
       else if (/\.xls$/i.test(f.name)) return toast('Arquivo .xls antigo: abra no Excel e salve como .xlsx ou CSV.');
       else text = await f.text();
     } catch (err) { return toast('Não consegui ler o arquivo: ' + (err.message || err)); }
