@@ -14,8 +14,7 @@ jobs:
           URL: https://avvheyvodewuhpdvytim.supabase.co
           KEY: sb_publishable_tB7UaNfScyk-BMW0hxd4Rw_3SUQBZy8   # chave pública: a mesma que já está no site
         run: |
-          code=$(curl -s -o /dev/null -w "%{http_code}" --retry 3 --retry-delay 20 "$URL/rest/v1/settings?select=user_id&limit=1" -H "apikey: $KEY")
+          # ping() é uma função que só devolve 1: roda no banco de verdade e não mostra dado nenhum
+          code=$(curl -s -o /dev/null -w "%{http_code}" --retry 3 --retry-delay 20 -X POST "$URL/rest/v1/rpc/ping" -H "apikey: $KEY" -H "Content-Type: application/json" -d '{}')
           echo "Supabase respondeu HTTP $code"
-          # 401 = o banco respondeu e negou (a tabela é fechada para quem não está logado): está acordado.
-          # Pausado ou fora do ar dá 000 (endereço não existe) ou 5xx.
-          case "$code" in 200|401) exit 0 ;; *) exit 1 ;; esac
+          test "$code" = "200"
