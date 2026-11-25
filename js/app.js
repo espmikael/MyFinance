@@ -1,5 +1,5 @@
-import * as L from './logic.js?v=20261125d';
-import { SUPABASE_URL, SUPABASE_ANON_KEY } from './config.js?v=20261125d';
+import * as L from './logic.js?v=20261125e';
+import { SUPABASE_URL, SUPABASE_ANON_KEY } from './config.js?v=20261125e';
 
 const $app = document.getElementById('app');
 const $toast = document.getElementById('toast');
@@ -1789,7 +1789,7 @@ function pickFile() {
     if (f.size > 15e6) return toast('Arquivo grande demais para uma fatura.');
     let text;
     try {
-      if (/\.xlsx$/i.test(f.name)) { const X = await import('./xlsx.js?v=20261125d'); text = await X.xlsxToCSV(await f.arrayBuffer()); }
+      if (/\.xlsx$/i.test(f.name)) { const X = await import('./xlsx.js?v=20261125e'); text = await X.xlsxToCSV(await f.arrayBuffer()); }
       else if (/\.xls$/i.test(f.name)) return toast('Arquivo .xls antigo: abra no Excel e salve como .xlsx ou CSV.');
       else text = await f.text();
     } catch (err) { return toast('Não consegui ler o arquivo: ' + (err.message || err)); }
@@ -2153,6 +2153,8 @@ function saldosSheet() {
 function menuSheet() {
   const theme = document.documentElement.dataset.theme || 'auto';
   const html = `<h2>Mais</h2>
+    <button class="row" data-go="domingo"><span>Fechar a semana</span><span class="end">›</span></button>
+    <button class="row" data-go="assinaturas"><span>Assinaturas</span><span class="end">›</span></button>
     <button class="row" data-go="reservas"><span>Reservas</span><span class="end">›</span></button>
     <button class="row" data-go="ajustes"><span>Ajustes e regras</span><span class="end">›</span></button>
     <div class="lbl" style="margin-top:16px">Tema</div>
