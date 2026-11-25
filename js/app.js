@@ -1,5 +1,5 @@
-import * as L from './logic.js?v=20261125a';
-import { SUPABASE_URL, SUPABASE_ANON_KEY } from './config.js?v=20261125a';
+import * as L from './logic.js?v=20261125b';
+import { SUPABASE_URL, SUPABASE_ANON_KEY } from './config.js?v=20261125b';
 
 const $app = document.getElementById('app');
 const $toast = document.getElementById('toast');
@@ -123,6 +123,17 @@ function renderLock() {
 }
 
 // ---------------- início ----------------
+// Atalho do iPhone: ?lancar=32,50&rubrica=Alimentação abre o Lançar já preenchido (depois de entrar/desbloquear)
+const LAUNCH = (() => {
+  try {
+    const p = new URLSearchParams(location.search);
+    if (!p.has('lancar')) return null;
+    const amount = num(p.get('lancar') || '');
+    return { amount: amount > 0 ? amount : null, cat: p.get('rubrica') || '' };
+  } catch (e) { return null; }
+})();
+let pendingLaunch = LAUNCH;
+if (LAUNCH) { try { history.replaceState(null, '', location.pathname); } catch (e) {} }
 boot();
 
 async function boot() {
@@ -316,8 +327,9 @@ function render() {
   const body = {
     home: () => viewHome(s), gastos: () => viewGastos(s), analise: () => viewAnalise(s), mes: viewMes,
     reservas: viewReservas, ajustes: viewAjustes, entradas: viewEntradas, regras: viewRegras,
+    domingo: () => viewDomingo(s), assinaturas: viewAssinaturas,
   }[state.view]();
-  const cur = state.view === 'entradas' ? 'mes' : state.view === 'regras' ? 'ajustes' : state.view;
+  const cur = { entradas: 'mes', regras: 'ajustes', domingo: 'home', assinaturas: 'gastos' }[state.view] || state.view;
   const nav = ([id, l, ic]) => `<button class="navlink" data-act="view" data-v="${id}" ${cur === id ? 'aria-current="page"' : ''}>${icon(ic)}${l}</button>`;
   const unc = id => id === 'gastos' && s.toClassify && s.toClassify.length && state.view !== 'gastos' ? `<span class="badge" aria-label="${s.toClassify.length} sem rubrica">${s.toClassify.length}</span>` : '';
   const tab = ([id, l, ic]) => `<button data-act="view" data-v="${id}" ${cur === id ? 'aria-current="page"' : ''}><span class="tabic">${icon(ic, 22)}${unc(id)}</span>${l}</button>`;
@@ -337,6 +349,7 @@ function render() {
     </nav>
   </div>`;
   wireCharts();
+  if (pendingLaunch) { const p = pendingLaunch; pendingLaunch = null; setTimeout(() => lancarSheet('gasto', null, p), 60); }
 }
 
 // média por rubrica dos últimos ciclos fechados (guardada até mudar gastos, regras ou ajustes)
@@ -686,7 +699,8 @@ function undoBatchSheet(key) {
 function pendencias(s) {
   const items = [];
   const up = uploadDue();
-  if (up) items.push(`<button class="pend-i" data-act="upload"><span class="dot"></span>${up.isSun ? 'Enviar faturas de hoje' : 'Enviar faturas'}<span class="go">›</span></button>`);
+  if (up) items.push(`<button class="pend-i" data-act="domingo"><span class="dot"></span>${up.isSun ? 'Fechar a semana' : 'Enviar faturas'}<span class="go">›</span></button>`);
+  else if (L.weekdayShort(today()) === 'dom') items.push(`<button class="pend-i ok" data-act="domingo">Fechamento da semana<span class="go">›</span></button>`);
   if (s.toClassify.length) items.push(`<button class="pend-i" data-act="classify"><span class="dot"></span>${s.toClassify.length === 1 ? '1 sem rubrica' : `${s.toClassify.length} sem rubrica`}<span class="go">›</span></button>`);
   return items.length ? `<div class="pend" role="group" aria-label="Pendências">${items.join('')}</div>` : '';
 }
@@ -777,7 +791,7 @@ function viewMes() {
               <div class="lb-row"><span>− Parcelas e assinaturas no cartão</span><b>${money(m.committed)}</b></div>
               ${[...m.commits.actual, ...m.commits.pending].map(c => { const pm = String(c.title).match(/parcela\s*(\d+)\s*\/\s*(\d+)/i); const k = pm ? +pm[1] : 0, n = pm ? +pm[2] : 0;
                 return `<div class="lrow sub"><span class="m"><b>${esc(L.prettyTitle(c.title))}</b><small>${c.kind}${c.pending ? ' · ainda não veio' : ' · ' + L.ddmm(c.date)}${n ? ` · depois desta, faltam ${n - k} (${money(c.amount * (n - k))})` : ''}</small>${n ? `<span class="thinbar" aria-hidden="true" style="margin-top:6px"><i style="width:${Math.round(k / n * 100)}%"></i></span>` : ''}</span><span class="r"><b class="${c.pending ? 'muted' : ''}">${money(c.amount)}</b></span></div>`; }).join('')}
-              <div class="actions"><button class="btn small" data-act="view" data-v="ajustes">Ajustar limite</button></div>
+              <div class="actions"><button class="btn small" data-act="view" data-v="ajustes">Ajustar limite</button>${m.isCurrent ? '<button class="btn small ghost" data-act="subs">Ver assinaturas</button>' : ''}</div>
             </div>
           </details>` : ''}
           ${bad}
@@ -833,7 +847,7 @@ function gastosList(s) {
   const known = new Set(catNames().concat([L.IGNORE]));
   const f = state.filter, qq = L.normalize(state.q);
   const isCard = t => state.settings.cards.some(c => c.id === (t.source || 'nubank'));
-  const list = s.txs.filter(t => f === 'all' ? true : f === 'unc' ? !known.has(t.cat) : f === 'cards' ? isCard(t) : f === 'out' ? !isCard(t) : f.startsWith('src:') ? (t.source || 'nubank') === f.slice(4) : f.startsWith('cat:') ? t.cat === f.slice(4) : true)
+  const list = s.txs.filter(t => f === 'all' ? true : f === 'unc' ? !known.has(t.cat) : f === 'cards' ? isCard(t) : f === 'out' ? !isCard(t) : f.startsWith('src:') ? (t.source || 'nubank') === f.slice(4) : f.startsWith('cat:') ? t.cat === f.slice(4) : f.startsWith('day:') ? t.day === f.slice(4) : true)
     .filter(t => !qq || L.normalize(`${t.title} ${L.prettyTitle(t.title)} ${t.cat} ${t.amount.toFixed(2).replace('.', ',')}`).includes(qq))
     .sort((a, b) => b.date.localeCompare(a.date) || a.title.localeCompare(b.title));
   if (!list.length) return `<p class="help" style="margin-top:20px">${qq ? 'Nada encontrado.' : 'Nada aqui neste ciclo.'}</p>`;
@@ -868,12 +882,14 @@ function viewGastos(s) {
     <label class="search">${icon('search')}<input id="gq" type="search" placeholder="Buscar loja, rubrica ou valor" value="${esc(state.q)}" aria-label="Buscar gastos"></label>
     <div class="chips" role="toolbar" aria-label="Filtrar">
       ${chip('all', 'Todos')}
+      ${f.startsWith('day:') ? chip(f, `${L.weekdayShort(f.slice(4))} ${L.ddmm(f.slice(4))}`) : ''}
       ${unc.length ? chip('unc', `Sem rubrica · ${unc.length}`, 'flag') : ''}
       ${chip('cards', 'Cartões')}${hasOut ? chip('out', 'Fora do cartão') : ''}
       ${srcIds.map(id => chip('src:' + id, `<span class="dot" style="background:${safeColor(sourceColor(id))}"></span>${esc(sourceName(id))}`)).join('')}
       ${catsHere.map(c => chip('cat:' + c, esc(c))).join('')}
     </div>
     ${catAvail(s)}
+    ${subsLink(s)}
     <div id="txlist">${gastosList(s)}</div>`;
 }
 
@@ -1021,6 +1037,7 @@ function viewAnalise(s) {
     ${!s.txs.length ? `<p class="help" style="margin-top:20px">Ainda não há gastos neste ciclo.</p>` : `
     <div class="dash" style="margin-top:16px">
       ${weeksCard(s)}
+      ${calCard(s)}
       <section class="card">
         <div class="card-head"><h2>Ritmo do ciclo</h2></div>
         <div class="legend"><span><span class="sw-line"></span>Gasto acumulado (sem fixos)</span>${s.varBudget > 0 ? `<span><span class="sw-dash"></span>Limite do variável · ${money(s.varBudget)}</span>` : ''}</div>
@@ -1212,6 +1229,7 @@ function viewAjustes() {
           <div class="seg" role="group" aria-label="Travar de novo depois de" style="max-width:420px">${[[0, 'na hora'], [1, '1 min'], [5, '5 min'], [15, '15 min']].map(([v, l]) => `<button data-act="lock-relock" data-v="${v}" aria-pressed="${Number(c.relock) === v}">${l}</button>`).join('')}</div>
           <div class="actions"><button class="btn small" data-act="lock-now">Travar agora</button><button class="btn small ghost" data-act="lock-off">Desativar</button></div>`; })()}
     </section>
+    ${atalhoCard()}
     <section class="card">
       <div class="card-head"><h2>Aparência</h2></div>
       <div class="seg" role="group" aria-label="Tema" style="max-width:360px">
@@ -1341,6 +1359,153 @@ function parcelViz(total, cur, value, endYM) {
   </div>`;
 }
 
+// ----- Fechar a semana (domingo) -----
+function lastUploadBy() {
+  const m = {};
+  for (const t of state.txs) if (!t.manual && t.created_at) { const d = localDay(t.created_at), k = t.source || 'nubank'; if (!m[k] || d > m[k]) m[k] = d; }
+  return m;
+}
+const lastSunday = () => { const t = today(); return L.addDays(t, -new Date(t + 'T12:00:00').getDay()); };
+// a semana a fechar: no domingo, a que termina hoje; nos outros dias, a anterior
+function weekToClose(s) {
+  const t = today();
+  if (s.week && s.week.end === t) return { w: s.week, ps: s, i: s.weeks.indexOf(s.week) };
+  let i = s.week ? s.weeks.indexOf(s.week) - 1 : -1, ps = s;
+  if (i < 0) { ps = summary(L.shiftCycle(s.cycle.start, -1, card().closing || 1)); i = ps.weeks.length - 1; }
+  return { w: ps.weeks[i], ps, i };
+}
+function weekStats(ps, w) {
+  const inWeek = ps.txs.filter(t => t.day >= w.start && t.day <= w.end && !t.isFixed && !t.commit && t.cat !== L.IGNORE && t.amount > 0);
+  const byCat = {};
+  for (const t of inWeek) byCat[t.cat] = (byCat[t.cat] || 0) + t.amount;
+  return { diff: w.spent - w.limit, top: [...inWeek].sort((a, b) => b.amount - a.amount).slice(0, 3), topCat: Object.entries(byCat).sort((a, b) => b[1] - a[1])[0] };
+}
+function viewDomingo() {
+  const s = summary(curCycle());
+  const t = today(), sun = lastSunday();
+  const ups = lastUploadBy();
+  const when = d => (d === t ? 'hoje' : d === L.addDays(t, -1) ? 'ontem' : `${L.weekdayShort(d)} ${L.ddmm(d)}`);
+  const steps = state.settings.cards.map(c => {
+    const d = ups[c.id], ok = d && d >= sun;
+    return { ok, html: `<b>Fatura do ${esc(c.name)}</b><small>${ok ? `enviada ${when(d)}` : d ? `último envio ${when(d)}` : 'nunca enviada'}</small>`, btn: ok ? '' : `<button class="btn small primary" data-act="upload">Enviar</button>` };
+  });
+  const unc = s.toClassify.length;
+  steps.push({ ok: !unc, html: `<b>Classificar compras</b><small>${unc ? `${unc} sem rubrica · ${money(s.unclassifiedTotal)}` : 'tudo com rubrica'}</small>`, btn: unc ? `<button class="btn small primary" data-act="classify">Classificar</button>` : '' });
+  const done = steps.filter(x => x.ok).length, all = done === steps.length;
+  const list = `<ol class="steps">${steps.map((x, i) => `<li class="${x.ok ? 'done' : ''}"><span class="ck" aria-hidden="true">${x.ok ? icon('check', 14, 2.6) : i + 1}</span><span class="m">${x.html}</span>${x.btn}</li>`).join('')}</ol>`;
+
+  const { w, ps, i } = weekToClose(s);
+  let review = '', next = '';
+  if (w && w.limit != null) {
+    const st = weekStats(ps, w);
+    review = `<section class="card review" aria-labelledby="dm-h">
+      <div class="card-head"><h2 id="dm-h">Semana ${L.ddmm(w.start)}–${L.ddmm(w.end)}</h2>${all ? '' : '<span class="sub">parcial: faltam envios</span>'}</div>
+      <div class="rv-top"><span><small>Gastou</small><b>${money(w.spent)}</b></span><span><small>Teto</small><b>${money(w.limit)}</b></span><span><small>${st.diff > 0 ? 'Passou' : 'Sobrou'}</small><b class="${st.diff > 0 ? 'neg' : 'pos'}">${money(Math.abs(st.diff))}</b></span></div>
+      ${st.topCat ? `<p class="small" style="margin:10px 0 6px;color:var(--text-2)">Onde mais foi: <b>${esc(st.topCat[0])}</b> (${money(st.topCat[1])}).</p>` : ''}
+      ${st.top.length ? `<div class="rv-list">${st.top.map(x => `<div><span>${esc(L.prettyTitle(x.title))}<small>${L.weekdayShort(x.date)} ${L.ddmm(x.date)} · ${esc(x.cat)}</small></span><b>${money(x.amount)}</b></div>`).join('')}</div>` : ''}
+    </section>`;
+    // o que vem: no domingo, a próxima semana; nos outros dias, a semana em curso
+    const closingNow = w === s.week;
+    let nw = closingNow ? (ps.weeks[i + 1] || summary(L.shiftCycle(s.cycle.start, 1, card().closing || 1)).weeks[0]) : s.week;
+    if (nw && nw.limit != null) {
+      next = `<div class="kcard hero next-week ${nw.containment ? 'zero' : ''}">
+        <span class="kl">${closingNow ? 'A próxima semana libera' : 'Esta semana ainda libera'}</span>
+        <span class="kv">${money(closingNow ? nw.limit : Math.max(0, nw.left))}</span>
+        <span class="ks">${L.ddmm(nw.start)}–${L.ddmm(nw.end)} · cerca de ${money((closingNow ? nw.limit : Math.max(0, nw.left)) / Math.max(1, closingNow ? nw.days : nw.daysLeft || 1))} por dia${nw.containment ? ' · teto reduzido: só o essencial' : ''}</span>
+      </div>`;
+    }
+  }
+  return `${pageHead('Fechar a semana', all ? 'tudo enviado e classificado' : `${done} de ${steps.length} feito`, headActions({ upload: false }))}
+    <div class="dash">
+      <section class="card" aria-label="Passos">${list}
+        <p class="help small" style="margin:10px 0 0">Exporte a fatura no app do banco (CSV no Nubank, extrato do cartão no Inter) e envie aqui. A fatura substitui o que você lançou à mão.</p>
+      </section>
+      ${next}
+      ${review}
+    </div>`;
+}
+
+// ----- Assinaturas -----
+const subsOf = () => L.subscriptions({ txs: state.txs, rules: state.rules, settings: state.settings, cycle: curCycle(), today: today() });
+function subsLink(s) {
+  if (!s.isCurrent) return '';
+  const x = subsOf();
+  if (!x.items.length) return '';
+  return `<button class="linkrow" data-act="subs">${icon('repeat', 16)}<span><b>Assinaturas</b> · ${x.items.filter(i => !i.cancel).length} ativas, ${money(x.month)} por mês</span><span class="go">›</span></button>`;
+}
+function viewAssinaturas() {
+  const x = subsOf();
+  const mon = d => (d ? `${L.MONTHS_SHORT[+d.slice(5, 7) - 1]}/${d.slice(2, 4)}` : '');
+  const rows = x.items.map(it => `<div class="subrow ${it.cancel ? 'off' : ''}">
+      <span class="ic" aria-hidden="true">${icon(catIcon(it.cat) || 'repeat', 18)}</span>
+      <span class="m"><b>${esc(it.label)}</b><small>${esc(it.cat || 'sem rubrica')} · dia ${it.day}${it.since ? ` · desde ${mon(it.since)}` : ''} · ${it.cancel ? 'marcada para cancelar' : it.pending ? 'ainda vem neste ciclo' : `veio ${L.ddmm(it.date)}`}</small></span>
+      <span class="r"><b>${money(it.amount)}</b><small>${money(it.amount * 12)}/ano</small></span>
+      <button class="btn small ${it.cancel ? '' : 'ghost'}" data-act="sub-cancel" data-k="${esc(it.mkey)}" aria-pressed="${it.cancel}">${it.cancel ? 'Manter' : 'Quero cancelar'}</button>
+    </div>`).join('');
+  return `${pageHead('Assinaturas', 'cobranças que se repetem todo mês no cartão', headActions({ upload: false }))}
+    <div class="kpis"><div><span class="kl">Por mês</span><b>${money(x.month)}</b><small>${x.items.filter(i => !i.cancel).length} ativas</small></div>
+      <div><span class="kl">Por ano</span><b>${money(x.year)}</b><small>no ritmo de hoje</small></div>
+      ${x.saved > 0 ? `<div><span class="kl">Cancelando as marcadas</span><b class="pos">${money(x.savedYear)}</b><small>a menos por ano</small></div>` : ''}</div>
+    <section class="card" style="margin-top:16px">
+      ${rows || '<p class="help">Nenhuma assinatura detectada ainda. O app reconhece a mesma loja, com valor parecido, em pelo menos 2 dos 3 últimos ciclos.</p>'}
+      <p class="help small" style="margin:12px 0 0">"Quero cancelar" não cancela nada no serviço: isso você faz no app dele. Aqui, a assinatura marcada sai da previsão do mês; se ela cobrar mesmo assim, aparece como gasto.</p>
+    </section>`;
+}
+
+// ----- Calendário do gasto livre (Análise) -----
+const DOW_FULL = ['segunda', 'terça', 'quarta', 'quinta', 'sexta', 'sábado', 'domingo'];
+function calCard(s) {
+  const days = L.dailyFree(s);
+  if (!days.length) return '';
+  const t = today();
+  // escala pelo percentil 90: uma compra enorme não apaga o resto do mês (ela só satura)
+  const vals = days.filter(d => d.date <= t && d.value > 0).map(d => d.value).sort((a, b) => b - a);
+  const max = Math.max(1, vals[Math.floor(vals.length * 0.1)] || 0);
+  const lvl = v => (v <= 0 ? 0 : v < max * 0.25 ? 1 : v < max * 0.5 ? 2 : v < max * 0.75 ? 3 : 4);
+  const k = v => (state.priv ? '•' : v >= 1000 ? (v / 1000).toLocaleString('pt-BR', { maximumFractionDigits: 1 }) + 'k' : Math.round(v));
+  const cells = '<span class="cd blank"></span>'.repeat(days[0].dow) + days.map(d => {
+    const fut = d.date > t, has = !fut && d.value > 0;
+    return `<button class="cd l${fut ? 0 : lvl(d.value)}${fut ? ' fut' : ''}${d.date === t ? ' today' : ''}" data-act="cal-day" data-d="${d.date}" ${has ? '' : 'disabled'} aria-label="${L.weekdayShort(d.date)} ${L.ddmm(d.date)}: ${has ? money(d.value) : 'nada'}"><small>${+d.date.slice(8, 10)}</small><b>${has ? k(d.value) : ''}</b></button>`;
+  }).join('');
+  const cl = card().closing || 1, list = [s];
+  for (let i = 1; i <= 3; i++) { const p = summary(L.shiftCycle(s.cycle.start, -i, cl)); if (p.varSpent > 0) list.push(p); }
+  const avg = L.weekdayAverage(list, t);
+  const tot = avg.reduce((a, b) => a + b, 0);
+  const wkShare = tot > 0 ? (avg[4] + avg[5] + avg[6]) / tot : 0;
+  const peak = avg.indexOf(Math.max(...avg));
+  const title = tot <= 0 ? 'Calendário do gasto livre' : wkShare >= 0.5 ? `Sexta a domingo levam ${Math.round(wkShare * 100)}% do gasto livre` : `${DOW_FULL[peak].replace(/^./, c => c.toUpperCase())} é o dia que mais pesa`;
+  const amax = Math.max(1, ...avg);
+  const bars = avg.map((v, i) => `<div class="wdbar ${i === peak && tot > 0 ? 'peak' : ''}"><i style="height:${(v / amax * 100).toFixed(0)}%"></i><small>${['seg', 'ter', 'qua', 'qui', 'sex', 'sáb', 'dom'][i]}</small></div>`).join('');
+  return `<section class="card full calcard" aria-labelledby="cal-h">
+    <div class="card-head"><h2 id="cal-h">${title}</h2><span class="sub">gasto livre por dia: sem contas, parcelas, assinaturas e compras pontuais</span></div>
+    <div class="calwrap">
+      <div><div class="calgrid hd" aria-hidden="true">${['S', 'T', 'Q', 'Q', 'S', 'S', 'D'].map(x => `<span>${x}</span>`).join('')}</div>
+        <div class="calgrid">${cells}</div>
+        <div class="calscale" aria-hidden="true"><span>menos</span><i class="l1"></i><i class="l2"></i><i class="l3"></i><i class="l4"></i><span>mais</span></div></div>
+      ${tot > 0 ? `<div class="wdavg"><div class="lbl">Média por dia da semana${list.length > 1 ? ` · ${list.length} ciclos` : ''}</div><div class="wdbars">${bars}</div>
+        <p class="small muted" style="margin:8px 0 0">${DOW_FULL[peak]}: ${money(avg[peak])} em média. Toque num dia do calendário para ver as compras.</p></div>` : ''}
+    </div>
+  </section>`;
+}
+
+// ----- Atalho do iPhone -----
+const ATALHO_URL = `${location.origin}${location.pathname}?lancar=VALOR&rubrica=RUBRICA`;
+function atalhoCard() {
+  return `<section class="card">
+      <div class="card-head"><h2>Lançar pelo Atalho do iPhone</h2></div>
+      <p class="help">Um atalho "Gastei" pergunta o valor e a rubrica e abre o app com o Lançar já preenchido. Dá para chamar pela Siri, pelo botão de Ação ou por um ícone na tela de início.</p>
+      <ol class="howto">
+        <li>No app Atalhos, toque em + e dê o nome <b>Gastei</b>.</li>
+        <li>Adicione <b>Pedir Entrada</b>: tipo Número, pergunta "Quanto?".</li>
+        <li>Adicione <b>Escolher da Lista</b> com as rubricas: ${catNames().map(esc).join(', ')}.</li>
+        <li>Adicione <b>URL</b> com o endereço abaixo. Troque VALOR por "Entrada Fornecida" e RUBRICA por "Item Escolhido".</li>
+        <li>Adicione <b>Abrir URLs</b>.</li>
+      </ol>
+      <div class="copyrow"><code>${esc(ATALHO_URL)}</code><button class="btn small" data-act="copy-atalho">Copiar</button></div>
+      <p class="help small" style="margin:10px 0 0">O atalho abre no Safari, que guarda o login separado do app da tela de início. Na primeira vez, entre com a senha lá (e ative o Face ID nesse Safari também, se quiser).</p>
+    </section>`;
+}
+
 // ---------------- eventos ----------------
 document.addEventListener('click', async e => {
   const el = e.target.closest('[data-act]');
@@ -1354,6 +1519,18 @@ document.addEventListener('click', async e => {
     case 'batch-undo': return undoBatchSheet(el.dataset.k);
     case 'batch-dismiss': state.lastBatch = null; return render();
     case 'upload': return pickFile();
+    case 'domingo': return go('domingo');
+    case 'subs': return go('assinaturas');
+    case 'sub-cancel': {
+      const k = el.dataset.k, list = new Set(state.settings.cancelSubs || []);
+      if (list.has(k)) list.delete(k); else list.add(k);
+      if (await saveSettings({ ...state.settings, cancelSubs: [...list] })) { const y = window.scrollY; render(); window.scrollTo(0, y); }
+      return;
+    }
+    case 'cal-day': return go('gastos', { filter: 'day:' + el.dataset.d, cycle: state.cycle });
+    case 'copy-atalho':
+      try { await navigator.clipboard.writeText(ATALHO_URL); toast('Endereço copiado.'); } catch (e2) { toast('Não consegui copiar. Selecione o texto e copie.'); }
+      return;
     case 'lancar': return lancarSheet(el.dataset.mode || 'gasto');
     case 'prev': state.cycle = L.shiftCycle(state.cycle.start, -1, closing); return render();
     case 'next': if (state.cycle.start < curCycle().start) { state.cycle = L.shiftCycle(state.cycle.start, 1, closing); render(); } return;
@@ -1604,7 +1781,7 @@ function pickFile() {
     if (f.size > 15e6) return toast('Arquivo grande demais para uma fatura.');
     let text;
     try {
-      if (/\.xlsx$/i.test(f.name)) { const X = await import('./xlsx.js?v=20261125a'); text = await X.xlsxToCSV(await f.arrayBuffer()); }
+      if (/\.xlsx$/i.test(f.name)) { const X = await import('./xlsx.js?v=20261125b'); text = await X.xlsxToCSV(await f.arrayBuffer()); }
       else if (/\.xls$/i.test(f.name)) return toast('Arquivo .xls antigo: abra no Excel e salve como .xlsx ou CSV.');
       else text = await f.text();
     } catch (err) { return toast('Não consegui ler o arquivo: ' + (err.message || err)); }
@@ -1680,7 +1857,7 @@ function uploadSheet(fileName, parsed) {
       const b = batches().find(x => x.ids.some(id => mine.has((state.txs.find(t => t.id === id) || {}).uid)));
       state.lastBatch = b ? b.key : null;
       close();
-      if (state.view !== 'home') go('home'); else render();
+      if (!['home', 'domingo'].includes(state.view)) go('home'); else render();
       toast(`${fresh.length} ${fresh.length === 1 ? 'compra adicionada' : 'compras adicionadas'}${manualIds.length ? ` · ${manualIds.length} ${manualIds.length === 1 ? 'lançamento à mão substituído' : 'lançamentos à mão substituídos'}` : ''}.`);
     });
     update();
@@ -1688,7 +1865,7 @@ function uploadSheet(fileName, parsed) {
 }
 
 // ----- Lançar gasto ou entrada -----
-function lancarSheet(mode, dateDefault) {
+function lancarSheet(mode, dateDefault, pre = null) {
   const srcs = [...state.settings.cards.map(c => ({ id: c.id, name: c.name, color: c.color })), ...L.METHODS];
   const rules = state.settings.incomeRules || [];
   // abre com o último jeito de pagar usado e com as 4 rubricas que você mais usa
@@ -1697,13 +1874,17 @@ function lancarSheet(mode, dateDefault) {
   const since = L.addDays(today(), -90), freq = {};
   for (const t of state.txs) if (t.date >= since) { const c = L.categoryOf(t, state.rules); freq[c] = (freq[c] || 0) + 1; }
   const ordered = [...catNames()].sort((a, b) => (freq[b] || 0) - (freq[a] || 0));
+  // atalho: aceita a rubrica sem acento ou com maiúscula diferente
+  const preCat = pre && pre.cat ? catNames().find(c => L.normalize(c) === L.normalize(pre.cat)) || null : null;
+  if (preCat) ordered.splice(ordered.indexOf(preCat), 1), ordered.unshift(preCat);
   const topCats = ordered.slice(0, 4), restCats = ordered.slice(4);
+  const preVal = pre && pre.amount ? pre.amount.toFixed(2).replace('.', ',') : '';
   const html = `<div class="head"><h2>Lançar</h2>
       <div class="seg" role="group" aria-label="Tipo de lançamento"><button data-mode="gasto" aria-pressed="${mode === 'gasto'}">Gasto</button><button data-mode="entrada" aria-pressed="${mode === 'entrada'}">Entrada</button></div></div>
-    <div class="field"><label for="lv">Valor</label><div class="money"><span>R$</span><input id="lv" inputmode="decimal" placeholder="0,00" autofocus></div></div>
+    <div class="field"><label for="lv">Valor</label><div class="money"><span>R$</span><input id="lv" inputmode="decimal" placeholder="0,00" value="${preVal}" ${preVal ? '' : 'autofocus'}></div></div>
     <div data-g>
       <div class="lbl" style="margin-top:14px">Rubrica</div>
-      <div class="wrapchips">${topCats.map(c => `<button class="chip" data-cat="${esc(c)}" aria-pressed="false">${esc(c)}</button>`).join('')}${restCats.length ? `<button class="chip dashed" data-more aria-expanded="false">Outras ›</button>` : ''}
+      <div class="wrapchips">${topCats.map(c => `<button class="chip" data-cat="${esc(c)}" aria-pressed="${c === preCat}">${esc(c)}</button>`).join('')}${restCats.length ? `<button class="chip dashed" data-more aria-expanded="false">Outras ›</button>` : ''}
         ${restCats.map(c => `<button class="chip" data-cat="${esc(c)}" aria-pressed="false" data-rest hidden>${esc(c)}</button>`).join('')}</div>
       <div class="lbl" style="margin-top:14px">Como pagou</div>
       <div class="wrapchips">${srcs.map(s => `<button class="chip" data-src="${esc(s.id)}" aria-pressed="${s.id === src0}"><span class="dot" style="background:${safeColor(s.color)}"></span>${esc(s.name)}</button>`).join('')}</div>
@@ -1722,7 +1903,7 @@ function lancarSheet(mode, dateDefault) {
     <div class="actions"><button class="btn primary grow" data-save>Lançar gasto</button><button class="btn ghost" data-close>Cancelar</button></div>`;
 
   openSheet(html, (sh, close) => {
-    let src = src0, cat = null, rk = '';
+    let src = src0, cat = preCat, rk = '';
     sh.$('[data-more]')?.addEventListener('click', e => { const b = e.currentTarget; b.hidden = true; sh.$$('[data-rest]').forEach(x => (x.hidden = false)); });
     const setMode = m => {
       mode = m;

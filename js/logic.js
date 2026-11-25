@@ -126,6 +126,7 @@ export function withDefaults(saved) {
   }
   if (s.varLimit != null && !(Number(s.varLimit) >= 0)) s.varLimit = null;
   if (!Array.isArray(s.oneOff)) s.oneOff = [];
+  if (!Array.isArray(s.cancelSubs)) s.cancelSubs = [];
   // rubricas essenciais (o mínimo do modo contenção): por padrão Mercado e Transporte
   s.categories = (s.categories || []).map(c => (c.essential == null ? { ...c, essential: /^(mercado|transporte)$/i.test(normalize(c.name)) } : c));
   return s;
@@ -714,7 +715,9 @@ function recurringIn(txs, rules, settings, cycle) {
 }
 export function cardCommitments({ txs, rules, settings, cycle, today }) {
   const now = recurringIn(txs, rules, settings, cycle);
-  const actual = now.cur.filter(t => now.kind.has(txKey(t))).map(t => ({ title: t.title, amount: round(Number(t.amount)), kind: now.kind.get(txKey(t)), date: t.date, key: txKey(t) }));
+  const actual = now.cur.filter(t => now.kind.has(txKey(t))).map(t => ({ title: t.title, amount: round(Number(t.amount)), kind: now.kind.get(txKey(t)), date: t.date, key: txKey(t), mkey: now.keyOf(t), source: t.source || 'nubank' }));
+  const cancel = new Set(settings.cancelSubs || []);
+  const canceled = [];
   const pending = [];
   if (today <= cycle.end) {
     // o que veio no ciclo anterior e ainda deve vir neste
@@ -729,12 +732,14 @@ export function cardCommitments({ txs, rules, settings, cycle, today }) {
         const came = now.cur.some(x => { const q = parcOf(x); return q && q.base === p.base && q.k === p.k + 1; });
         if (!came) pending.push({ title: String(t.title).replace(PARC_RE, '') + ` - Parcela ${p.k + 1}/${p.n}`, amount: round(Number(t.amount)), kind: 'parcela', pending: true });
       } else if (!now.curBy[prev.keyOf(t)]) {
-        pending.push({ title: t.title, amount: round(Number(t.amount)), kind: 'assinatura', pending: true });
+        const it = { title: t.title, amount: round(Number(t.amount)), kind: 'assinatura', pending: true, mkey: prev.keyOf(t), date: t.date, source: t.source || 'nubank' };
+        // marcada para cancelar: deixa de entrar na previsão (se cobrar mesmo assim, aparece como gasto quando vier)
+        if (cancel.has(it.mkey)) canceled.push(it); else pending.push(it);
       }
     }
   }
   const sum = l => round(l.reduce((a, x) => a + x.amount, 0));
-  return { actual, pending, kinds: now.kind, actualTotal: sum(actual), pendingTotal: sum(pending), total: round(sum(actual) + sum(pending)) };
+  return { actual, pending, canceled, kinds: now.kind, actualTotal: sum(actual), pendingTotal: sum(pending), total: round(sum(actual) + sum(pending)) };
 }
 
 // Semanas de segunda a domingo dentro do ciclo (as das pontas ficam incompletas).
@@ -1012,4 +1017,40 @@ export function moneyAgenda({ settings, txs, rules, incomes, today, days = 35, p
     tip = { need: Math.ceil(-min.balance / 10) * 10, from: before ? before.title : null, fromDate: before ? before.date : null, fromAmount: before ? before.amount : 0 };
   }
   return { events: ev, start: bal, balanceDate: settings.balance ? settings.balance.date : null, min, tip };
+}
+
+// Assinaturas do ciclo: as que já vieram e as que ainda devem vir, com desde quando aparecem.
+export function subscriptions({ txs, rules, settings, cycle, today }) {
+  const c = cardCommitments({ txs, rules, settings, cycle, today });
+  const cancel = new Set(settings.cancelSubs || []);
+  const items = [...c.actual.filter(x => x.kind === 'assinatura'), ...c.pending.filter(x => x.kind === 'assinatura'), ...c.canceled]
+    .map(x => {
+      const same = txs.filter(t => Number(t.amount) > 0 && !parcOf(t) && merchantOf(t, rules).key === x.mkey);
+      const first = same.reduce((m, t) => (!m || t.date < m ? t.date : m), null);
+      const any = same[0] || { title: x.title };
+      return { ...x, label: merchantOf(any, rules).label, cat: categoryOf(any, rules), since: first, day: +x.date.slice(8, 10), cancel: cancel.has(x.mkey) };
+    })
+    .sort((a, b) => b.amount - a.amount);
+  const active = items.filter(x => !x.cancel);
+  const month = round(active.reduce((a, x) => a + x.amount, 0));
+  const saved = round(items.filter(x => x.cancel).reduce((a, x) => a + x.amount, 0));
+  return { items, month, year: round(month * 12), saved, savedYear: round(saved * 12) };
+}
+
+// Calendário do gasto livre: quanto saiu em cada dia (sem contas, parcelas, assinaturas e compras pontuais).
+export function dailyFree(s) {
+  const by = {};
+  for (const t of s.txs) {
+    if (t.cat === IGNORE || t.isFixed || t.commit || t.oneOff || !(Number(t.amount) > 0)) continue;
+    by[t.day] = round((by[t.day] || 0) + Number(t.amount));
+  }
+  const days = [];
+  for (let d = s.cycle.start; d <= s.cycle.end; d = addDays(d, 1)) days.push({ date: d, value: by[d] || 0, dow: (new Date(parseISO(d)).getUTCDay() + 6) % 7 });
+  return days;
+}
+// Média por dia da semana (0 = segunda) em vários ciclos: soma de cada dia ÷ quantas vezes ele apareceu.
+export function weekdayAverage(summaries, today) {
+  const sum = Array(7).fill(0), n = Array(7).fill(0);
+  for (const s of summaries) for (const d of dailyFree(s)) { if (d.date > today) continue; sum[d.dow] += d.value; n[d.dow]++; }
+  return sum.map((v, i) => (n[i] ? round(v / n[i]) : 0));
 }
