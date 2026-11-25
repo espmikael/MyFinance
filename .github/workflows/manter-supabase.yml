@@ -1,0 +1,19 @@
+# Consulta o banco a cada 2 dias para o Supabase (plano grátis) não pausar o projeto por inatividade.
+# Se o projeto já estiver pausado ou fora do ar, a execução falha e o GitHub avisa por e-mail.
+name: Manter o Supabase acordado
+on:
+  schedule:
+    - cron: '17 12 */2 * *'   # 9h17 em Brasília, dia sim, dia não
+  workflow_dispatch:
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Consultar o banco
+        env:
+          URL: https://avvheyvodewuhpdvytim.supabase.co
+          KEY: sb_publishable_tB7UaNfScyk-BMW0hxd4Rw_3SUQBZy8   # chave pública: a mesma que já está no site
+        run: |
+          code=$(curl -s -o /dev/null -w "%{http_code}" --retry 3 --retry-delay 20 "$URL/rest/v1/settings?select=user_id&limit=1" -H "apikey: $KEY")
+          echo "Supabase respondeu HTTP $code"
+          test "$code" = "200"
