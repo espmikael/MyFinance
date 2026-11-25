@@ -1,5 +1,5 @@
-import * as L from './logic.js?v=20261125b';
-import { SUPABASE_URL, SUPABASE_ANON_KEY } from './config.js?v=20261125b';
+import * as L from './logic.js?v=20261125c';
+import { SUPABASE_URL, SUPABASE_ANON_KEY } from './config.js?v=20261125c';
 
 const $app = document.getElementById('app');
 const $toast = document.getElementById('toast');
@@ -1781,7 +1781,7 @@ function pickFile() {
     if (f.size > 15e6) return toast('Arquivo grande demais para uma fatura.');
     let text;
     try {
-      if (/\.xlsx$/i.test(f.name)) { const X = await import('./xlsx.js?v=20261125b'); text = await X.xlsxToCSV(await f.arrayBuffer()); }
+      if (/\.xlsx$/i.test(f.name)) { const X = await import('./xlsx.js?v=20261125c'); text = await X.xlsxToCSV(await f.arrayBuffer()); }
       else if (/\.xls$/i.test(f.name)) return toast('Arquivo .xls antigo: abra no Excel e salve como .xlsx ou CSV.');
       else text = await f.text();
     } catch (err) { return toast('Não consegui ler o arquivo: ' + (err.message || err)); }
