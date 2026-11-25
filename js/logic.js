@@ -1054,3 +1054,77 @@ export function weekdayAverage(summaries, today) {
   for (const s of summaries) for (const d of dailyFree(s)) { if (d.date > today) continue; sum[d.dow] += d.value; n[d.dow]++; }
   return sum.map((v, i) => (n[i] ? round(v / n[i]) : 0));
 }
+
+// Faturas que vêm: parcelas que ainda faltam e assinaturas ativas, nas próximas n faturas do cartão principal.
+// Cada compra parcelada é reconhecida pela loja, nº de parcelas e o ciclo em que caiu a 1ª (assim duas
+// compras iguais em meses diferentes não se misturam).
+export function futureInvoices({ txs, rules, settings, today, n = 6 }) {
+  const prim = primaryCard(settings), closing = prim.closing || 1;
+  const cur = cycleFor(today, closing);
+  const [y0, m0] = cur.start.split('-').map(Number);
+  const idx = start => { const [y, m] = start.split('-').map(Number); return (y - y0) * 12 + (m - m0); };
+  const cards = new Set(settings.cards.map(c => c.id));
+  const series = new Map();
+  for (const t of txs) {
+    if (!cards.has(t.source || 'nubank') || !(Number(t.amount) > 0)) continue;
+    const p = parcOf(t);
+    if (!p || p.n < 2) continue;
+    const ci = idx(cycleFor(billingDate(t, settings), closing).start);
+    if (ci > 0) continue;                                  // parcelas futuras lançadas à mão: a conta parte das que já caíram
+    const key = `${t.source || 'nubank'}|${p.base}|${p.n}|${ci - p.k}`;
+    const s = series.get(key);
+    if (!s || ci > s.ci) series.set(key, { ci, k0: p.k - ci, n: p.n, amount: round(Number(t.amount)), title: String(t.title).replace(PARC_RE, '') });
+  }
+  const live = [...series.values()].filter(s => s.ci >= -1 && s.k0 <= s.n);   // vista neste ciclo ou no anterior, e ainda não acabou
+  const subs = subscriptions({ txs, rules, settings, cycle: cur, today }).items.filter(x => !x.cancel);
+  const subsTotal = round(subs.reduce((a, x) => a + x.amount, 0));
+  const out = [];
+  let c = cur;
+  for (let j = 0; j < n; j++, c = shiftCycle(c.start, 1, closing)) {
+    const parcels = live.filter(s => s.k0 + j >= 1 && s.k0 + j <= s.n)
+      .map(s => ({ title: s.title, amount: s.amount, k: s.k0 + j, n: s.n, last: s.k0 + j === s.n }))
+      .sort((a, b) => b.amount - a.amount);
+    const parcelTotal = round(parcels.reduce((a, x) => a + x.amount, 0));
+    out.push({ cycle: c, due: dueDateFor(c, prim), parcels, parcelTotal, subs, subsTotal, total: round(parcelTotal + subsTotal), ends: parcels.filter(p => p.last).map(p => p.title) });
+  }
+  return out;
+}
+
+// Conferir a fatura: o que merece atenção nas compras de um envio.
+export function auditBatch({ txs, rules, ids }) {
+  const set = new Set(ids);
+  const batch = txs.filter(t => set.has(t.id));
+  const out = [];
+  // repetidas: mesma data, descrição e valor no mesmo envio (parcelas ficam de fora)
+  const g = {};
+  for (const t of batch) {
+    if (parcOf(t) || !(Number(t.amount) > 0)) continue;
+    (g[`${t.date}|${normalize(t.title)}|${round(Number(t.amount))}`] ||= []).push(t);
+  }
+  for (const list of Object.values(g)) if (list.length > 1)
+    out.push({ kind: 'dup', key: 'dup|' + list[0].uid, title: list[0].title, date: list[0].date, amount: round(Number(list[0].amount)), count: list.length });
+  // ficou mais caro: algo que veio com o mesmo valor nas duas vezes anteriores, em meses diferentes
+  const mk = new Map();
+  const keyOf = t => { if (!mk.has(t)) mk.set(t, merchantOf(t, rules).key); return mk.get(t); };
+  const hist = txs.filter(x => !set.has(x.id) && Number(x.amount) > 0 && !parcOf(x)).sort((a, b) => b.date.localeCompare(a.date));
+  const seen = new Set();
+  for (const t of batch) {
+    if (parcOf(t) || !(Number(t.amount) > 0)) continue;
+    const k = keyOf(t);
+    if (seen.has(k)) continue;
+    const prev = [];
+    for (const x of hist) { if (x.date < t.date && keyOf(x) === k) { prev.push(x); if (prev.length === 2) break; } }
+    if (prev.length < 2) continue;
+    const [p1, p2] = prev;
+    if (Math.abs(p1.amount - p2.amount) > 0.01 || p1.date.slice(0, 7) === p2.date.slice(0, 7)) continue;
+    const d = round(Number(t.amount) - Number(p1.amount));
+    if (d >= 1 && d <= p1.amount * 0.5) { seen.add(k); out.push({ kind: 'up', key: `up|${k}|${t.amount}`, label: merchantOf(t, rules).label, from: round(Number(p1.amount)), to: round(Number(t.amount)), diff: d }); }
+  }
+  // juros e encargos (sinal de fatura paga com atraso ou parcial) e IOF/tarifas
+  const sumOf = re => { const l = batch.filter(t => Number(t.amount) > 0 && re.test(normalize(t.title))); return { n: l.length, total: round(l.reduce((a, t) => a + Number(t.amount), 0)) }; };
+  const j = sumOf(/juros|multa|encargo|mora\b|rotativo|atraso/);
+  if (j.total > 0) out.push({ kind: 'juros', key: 'juros|' + ids[0], ...j });
+  const f = sumOf(/\biof\b|tarifa|anuidade/);
+  if (f.total > 0) out.push({ kind: 'iof', key: 'iof|' + ids[0], ...f });
+  return out;
+}

@@ -690,3 +690,41 @@ svg text.halo { paint-order: stroke; stroke: var(--surface); stroke-width: 4px; 
 .howto b { color: var(--text); }
 .copyrow { display: flex; align-items: center; gap: 8px; padding: 8px 8px 8px 12px; border-radius: 12px; background: var(--raise); }
 .copyrow code { flex: 1; min-width: 0; font-size: 12px; overflow-wrap: anywhere; color: var(--text-2); }
+
+/* ---- 25/11 c: faturas que vêm, conferir a fatura, fechamento do mês ---- */
+.fbars { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px; align-items: end; height: 160px; }
+.fbar { height: 100%; border: 0; background: none; padding: 0; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; gap: 5px; font: inherit; color: var(--text); cursor: pointer; }
+.fbar small { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.fbar .stk { width: 100%; max-width: 44px; display: flex; flex-direction: column; border-radius: 8px; overflow: hidden; min-height: 2px; }
+.fbar .stk .p { background: var(--brand); } .fbar .stk .s { background: color-mix(in oklab, var(--brand) 40%, var(--raise)); }
+.fbar .m { font-size: 12px; } .fbar[aria-pressed="true"] .m { font-weight: 700; }
+.fbar[aria-pressed="true"] .stk { outline: 2px solid var(--brand); outline-offset: 2px; }
+.fbar:active .stk { transform: scale(.96); }
+.sw-p, .sw-s { width: 10px; height: 10px; border-radius: 3px; background: var(--brand); } .sw-s { background: color-mix(in oklab, var(--brand) 40%, var(--raise)); }
+.fsel { display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; margin: 14px 0 4px; padding: 12px 14px; border-radius: 12px; background: var(--raise); }
+.fsel span { font-size: 13px; color: var(--text-2); } .fsel b { font-size: 18px; font-variant-numeric: tabular-nums; grid-row: span 2; align-self: center; }
+.fsel small { font-size: 12.5px; color: var(--muted); }
+
+.audit { display: flex; flex-direction: column; gap: 10px; margin: 14px 0 10px; }
+.aud { padding: 12px 14px; border-radius: 14px; background: var(--raise); transition: opacity .2s; }
+.aud .h { display: flex; justify-content: space-between; gap: 10px; } .aud .h b:last-child { font-variant-numeric: tabular-nums; flex: none; }
+.aud .h .warn { color: var(--warn); }
+.aud p { margin: 6px 0 10px; font-size: 13.5px; line-height: 1.45; color: var(--text-2); }
+.aud .actions { margin: 0; } .aud.done { opacity: .65; } .aud .ok { color: var(--ok); font-weight: 600; }
+
+.fechcard .card-head { margin-bottom: 4px; }
+.fech-hero { display: flex; flex-direction: column; gap: 8px; }
+.fech-hero .r1 { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.wkdots { display: flex; gap: 5px; } .wkdots i { width: 18px; height: 18px; border-radius: 6px; background: var(--ink-over, #FF8F9E); } .wkdots i.ok { background: #7FE3B6; }
+.fh3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-top: 6px; }
+.fh3 > span { display: flex; flex-direction: column; gap: 2px; padding: 10px; border-radius: 12px; background: rgba(255,255,255,.08); }
+.fh3 small { font-size: 12px; opacity: .8; } .fh3 b { font-size: 15px; font-variant-numeric: tabular-nums; }
+.fh3 b.pos { color: #7FE3B6; } .fh3 b.neg { color: #FF8F9E; }
+
+@media print {
+  .side, .tabs, .pagehead .backbtn, .pagehead .acts, .head-actions, .no-print, #toast, .icon-btn { display: none !important; }
+  body, .main { background: #fff !important; }
+  .main, .wrap { padding: 0 !important; margin: 0 !important; max-width: none !important; }
+  .card, .kcard { box-shadow: none !important; border: 1px solid #ddd !important; break-inside: avoid; }
+  .kcard.hero { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+}

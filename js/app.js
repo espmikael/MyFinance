@@ -1,5 +1,5 @@
-import * as L from './logic.js?v=20261125e';
-import { SUPABASE_URL, SUPABASE_ANON_KEY } from './config.js?v=20261125e';
+import * as L from './logic.js?v=20261125f';
+import { SUPABASE_URL, SUPABASE_ANON_KEY } from './config.js?v=20261125f';
 
 const $app = document.getElementById('app');
 const $toast = document.getElementById('toast');
@@ -335,9 +335,9 @@ function render() {
   const body = {
     home: () => viewHome(s), gastos: () => viewGastos(s), analise: () => viewAnalise(s), mes: viewMes,
     reservas: viewReservas, ajustes: viewAjustes, entradas: viewEntradas, regras: viewRegras,
-    domingo: () => viewDomingo(s), assinaturas: viewAssinaturas,
+    domingo: () => viewDomingo(s), assinaturas: viewAssinaturas, fechamento: viewFechamento,
   }[state.view]();
-  const cur = { entradas: 'mes', regras: 'ajustes', domingo: 'home', assinaturas: 'gastos' }[state.view] || state.view;
+  const cur = { entradas: 'mes', regras: 'ajustes', domingo: 'home', assinaturas: 'gastos', fechamento: 'analise' }[state.view] || state.view;
   const nav = ([id, l, ic]) => `<button class="navlink" data-act="view" data-v="${id}" ${cur === id ? 'aria-current="page"' : ''}>${icon(ic)}${l}</button>`;
   const unc = id => id === 'gastos' && s.toClassify && s.toClassify.length && state.view !== 'gastos' ? `<span class="badge" aria-label="${s.toClassify.length} sem rubrica">${s.toClassify.length}</span>` : '';
   const tab = ([id, l, ic]) => `<button data-act="view" data-v="${id}" ${cur === id ? 'aria-current="page"' : ''}><span class="tabic">${icon(ic, 22)}${unc(id)}</span>${l}</button>`;
@@ -430,6 +430,7 @@ function viewHome(s) {
     ${invoiceStrip()}
     ${state.homeCard && state.homeCard !== 'all' && state.settings.cards.some(c => c.id === state.homeCard) ? cardFocus(s, state.homeCard) : `
     ${homeNumbers(s)}
+    ${fechamentoCard()}
     ${prevOver}
     <div class="cols">
       <div class="col-main">${agendaCard(s)}</div>
@@ -676,7 +677,7 @@ function lastBatchNotice() {
   const b = batches().find(x => x.key === state.lastBatch);
   if (!b) return '';
   return `<div class="notice info"><span>Fatura do ${esc(sourceName(b.source))} enviada: ${b.ids.length} ${b.ids.length === 1 ? 'compra nova' : 'compras novas'}. Mandou o arquivo errado?</span>
-    <span style="display:flex;gap:8px"><button class="btn small" data-act="batch-undo" data-k="${esc(b.key)}">${icon('undo', 15)}Desfazer envio</button><button class="btn small ghost" data-act="batch-dismiss">Ok</button></span></div>`;
+    <span style="display:flex;gap:8px">${auditOf(b.key).length ? `<button class="btn small primary" data-act="audit" data-k="${esc(b.key)}">Conferir (${auditOf(b.key).length})</button>` : ''}<button class="btn small" data-act="batch-undo" data-k="${esc(b.key)}">${icon('undo', 15)}Desfazer envio</button><button class="btn small ghost" data-act="batch-dismiss">Ok</button></span></div>`;
 }
 
 function undoBatchSheet(key) {
@@ -804,6 +805,7 @@ function viewMes() {
           </details>` : ''}
           ${bad}
         </section>
+        ${futureCard()}
         <section class="card" aria-labelledby="en-h">
           <div class="card-head"><h2 id="en-h">Entradas</h2><span class="sub"><b style="color:var(--text)">${money(m.income)}</b> · ${rec} de ${inc.length} recebidas</span></div>
           ${incRows || '<p class="help">Nenhuma entrada prevista. Configure salário e vintena em Entradas fixas.</p>'}
@@ -1433,6 +1435,145 @@ function viewDomingo() {
     </div>`;
 }
 
+// ----- Faturas que vêm (Mês) -----
+function futureCard() {
+  const list = L.futureInvoices({ txs: state.txs, rules: state.rules, settings: state.settings, today: today() });
+  if (!list.some(x => x.total > 0)) return '';
+  const i = Math.min(state.futSel || 0, list.length - 1), sel = list[i], next = list[i + 1];
+  const max = Math.max(1, ...list.map(x => x.total));
+  const mon = x => L.MONTHS_SHORT[+x.due.slice(5, 7) - 1];
+  const bars = list.map((x, k) => `<button class="fbar" data-act="fut-sel" data-i="${k}" aria-pressed="${k === i}" aria-label="Fatura de ${L.MONTHS[+x.due.slice(5, 7) - 1]}: ${money(x.total)}">
+      <small>${state.priv ? '•' : Math.round(x.total)}</small>
+      <span class="stk"><i class="s" style="height:${(x.subsTotal / max * 110).toFixed(0)}px"></i><i class="p" style="height:${(x.parcelTotal / max * 110).toFixed(0)}px"></i></span>
+      <span class="m">${mon(x)}</span></button>`).join('');
+  const note = sel.ends.length ? `Termina${sel.ends.length > 1 ? 'm' : ''} aqui: ${sel.ends.map(t => esc(L.prettyTitle(t))).join(', ')}.${next ? ` Na seguinte, ${money(sel.total - next.total)} a menos.` : ''}`
+    : `${money(sel.parcelTotal)} em parcelas e ${money(sel.subsTotal)} em assinaturas.`;
+  const rows = sel.parcels.map(p => `<div class="lrow sub"><span class="m"><b>${esc(L.prettyTitle(p.title))}</b><small>parcela ${p.k}/${p.n}${p.last ? ' · última' : ''}</small></span><span class="r"><b>${money(p.amount)}</b></span></div>`).join('')
+    + (sel.subs.length ? `<div class="lrow sub"><span class="m"><b>Assinaturas</b><small>${sel.subs.map(x => esc(x.label)).join(', ')}</small></span><span class="r"><b>${money(sel.subsTotal)}</b></span></div>` : '');
+  return `<section class="card" aria-labelledby="fi-h">
+    <div class="card-head"><h2 id="fi-h">Faturas que vêm</h2><span class="sub">o que já está preso antes de passar o cartão</span></div>
+    <div class="fbars">${bars}</div>
+    <div class="legend" style="margin-top:8px"><span><span class="sw-p"></span>Parcelas</span><span><span class="sw-s"></span>Assinaturas</span></div>
+    <div class="fsel"><span>Já comprometido na fatura de ${L.MONTHS[+sel.due.slice(5, 7) - 1]}</span><b>${money(sel.total)}</b><small>${note}</small></div>
+    ${rows}
+  </section>`;
+}
+
+// ----- Conferir a fatura (depois de enviar) -----
+const AUDIT_KEY = 'mf-audit';
+const auditDone = () => { try { return new Set(JSON.parse(localStorage.getItem(AUDIT_KEY) || '[]')); } catch (e) { return new Set(); } };
+function auditMark(k) {
+  const d = [...auditDone(), k].slice(-300);
+  try { localStorage.setItem(AUDIT_KEY, JSON.stringify(d)); } catch (e) {}
+}
+function auditOf(key) {
+  const b = batches().find(x => x.key === key);
+  if (!b) return [];
+  const done = auditDone();
+  return L.auditBatch({ txs: state.txs, rules: state.rules, ids: b.ids }).filter(f => !done.has(f.key));
+}
+function auditSheet(key) {
+  const b = batches().find(x => x.key === key);
+  const items = auditOf(key);
+  if (!b || !items.length) return toast('Nada para conferir neste envio.');
+  const one = f => {
+    if (f.kind === 'dup') return [`${esc(L.prettyTitle(f.title))}, ${f.count} vezes`, money(f.amount), 'neg',
+      `Mesmo valor e mesma descrição em ${L.ddmm(f.date)}. Se foi uma compra só, é cobrança repetida: conteste no app do ${esc(sourceName(b.source))}.`,
+      [['Vou contestar', 'Conteste no app do banco. Quando estornarem, o crédito entra na próxima fatura.'], [`Foram ${f.count} compras`, '']]];
+    if (f.kind === 'up') return [`${esc(f.label)} ficou mais caro`, `+${money(f.diff)}`, 'warn',
+      `De ${money(f.from)} para ${money(f.to)}. Se for mensal, são ${money(f.diff * 12)} a mais por ano.`, [['Tudo bem', ''], ['Ver assinaturas', 'subs']]];
+    if (f.kind === 'juros') return ['Juros e encargos', money(f.total), 'neg',
+      `${f.n} ${f.n === 1 ? 'cobrança' : 'cobranças'} de juros, multa ou encargo. Costuma ser fatura paga com atraso ou só em parte: é o dinheiro mais caro que existe.`, [['Entendi', '']]];
+    return ['IOF e tarifas', money(f.total), 'warn', `${f.n} ${f.n === 1 ? 'cobrança' : 'cobranças'} de IOF, tarifa ou anuidade neste envio.`, [['Entendi', '']]];
+  };
+  const html = `<h2>Conferir a fatura</h2>
+    <div class="meta">${esc(sourceName(b.source))} · ${b.ids.length} ${b.ids.length === 1 ? 'compra nova' : 'compras novas'}</div>
+    <div class="audit">${items.map((f, i) => { const [t, v, cls, txt, acts] = one(f);
+      return `<div class="aud" data-i="${i}"><div class="h"><b>${t}</b><b class="${cls}">${v}</b></div><p>${txt}</p>
+        <div class="actions">${acts.map(([l, x], j) => `<button class="btn small ${j === 0 ? 'primary' : ''}" data-a="${i}" data-x="${esc(x)}">${l}</button>`).join('')}</div></div>`; }).join('')}</div>
+    <p class="help small">O app compara com as suas faturas anteriores. Nada muda nos seus gastos.</p>
+    <div class="actions"><button class="btn ghost grow" data-close>Fechar</button></div>`;
+  openSheet(html, (sh, close) => {
+    sh.$$('[data-a]').forEach(btn => btn.addEventListener('click', () => {
+      const f = items[Number(btn.dataset.a)], x = btn.dataset.x;
+      auditMark(f.key);
+      const box = sh.$(`.aud[data-i="${btn.dataset.a}"]`);
+      box.classList.add('done'); box.querySelector('.actions').innerHTML = `<span class="ok small">${x && x !== 'subs' ? esc(x) : 'Conferido.'}</span>`;
+      if (x === 'subs') { close(); go('assinaturas'); return; }
+      if (!sh.$$('.aud:not(.done)').length) setTimeout(() => { close(); render(); }, 900);
+    }));
+  });
+}
+
+// ----- Fechamento do mês -----
+// o ciclo que acabou de fechar (o anterior ao atual)
+const closedCycle = () => L.shiftCycle(curCycle().start, -1, card().closing || 1);
+function fechamentoData(cycle) {
+  const ps = summary(cycle);
+  const before = summary(L.shiftCycle(cycle.start, -1, card().closing || 1));
+  const cards = new Set(state.settings.cards.map(c => c.id));
+  const onCards = x => x.txs.filter(t => cards.has(t.source || 'nubank') && t.cat !== L.IGNORE).reduce((a, t) => a + Number(t.amount), 0);
+  const ws = ps.weeks.filter(w => w.limit != null);
+  const inTeto = ws.filter(w => w.spent <= w.limit + 0.5);
+  // média dos 3 ciclos anteriores a este (o próprio mês fica de fora)
+  const a = L.averageByCategory({ txs: state.txs, rules: state.rules, settings: state.settings, incomes: state.incomes, today: cycle.end });
+  const rows = ps.rows.filter(r => !r.fixed && (r.paceSpent > 0 || a.avg[r.name] > 0) && a.avg[r.name] > 0)
+    .map(r => ({ name: r.name, v: r.paceSpent, avg: a.avg[r.name], d: round2(r.paceSpent - a.avg[r.name]) }))
+    .sort((x, y) => Math.abs(y.d) - Math.abs(x.d)).slice(0, 5);
+  const days = L.dailyFree(ps), tot = days.reduce((x, d) => x + d.value, 0);
+  const wk = tot > 0 ? days.filter(d => d.dow >= 4).reduce((x, d) => x + d.value, 0) / tot : 0;
+  return { ps, ws, inTeto, card: round2(onCards(ps)), cardBefore: round2(onCards(before)), rows, wk, hasAvg: a.cycles.length > 0 };
+}
+const round2 = v => Math.round(v * 100) / 100;
+const rs = v => (state.priv ? 'R$ •••' : 'R$ ' + Math.round(v).toLocaleString('pt-BR'));
+function fechamentoCard() {
+  const c = closedCycle(), up = lastUploadDay();
+  if (!up || up <= c.end) return '';        // só depois de enviar a fatura que fechou; fica até você dispensar
+  let gone = false; try { gone = localStorage.getItem('mf-mes-' + c.start) === '1'; } catch (e) {}
+  if (gone) return '';
+  const f = fechamentoData(c);
+  if (!f.ps.txs.length) return '';
+  return `<section class="card fechcard" aria-labelledby="fc-h">
+    <div class="card-head"><h2 id="fc-h">${monthName(L.monthOfCycle(c))} fechou</h2><button class="icon-btn sm" data-act="fech-dismiss" data-c="${c.start}" aria-label="Dispensar">${icon('x', 16)}</button></div>
+    <p class="small" style="margin:0 0 10px;color:var(--text-2)">${f.ws.length ? `${f.inTeto.length} de ${f.ws.length} semanas dentro do teto · ` : ''}resultado <b class="${f.ps.result < 0 ? 'neg' : 'pos'}">${signed(f.ps.result)}</b></p>
+    <button class="btn small primary" data-act="fech">Ver o fechamento</button>
+  </section>`;
+}
+function viewFechamento() {
+  const c = closedCycle();
+  const f = fechamentoData(c);
+  const name = monthName(L.monthOfCycle(c));
+  if (!f.ps.txs.length) return `${pageHead(`${name} fechou`, '', headActions({ upload: false }))}<p class="help">Ainda não há gastos desse ciclo.</p>`;
+  const diff = f.card - f.cardBefore;
+  const max = Math.max(1, ...f.rows.map(r => Math.max(r.v, r.avg))) * 1.08;
+  const worst = f.rows.filter(r => r.d > 0)[0];
+  const tips = [];
+  if (worst) tips.push(`${esc(worst.name)} foi o que mais passou da média (+${money(worst.d)}).`);
+  const blown = f.ws.length - f.inTeto.length;
+  if (blown) tips.push(`${blown} ${blown === 1 ? 'semana passou' : 'semanas passaram'} do teto.`);
+  if (f.wk >= 0.5) tips.push(`Sexta a domingo levaram ${Math.round(f.wk * 100)}% do gasto livre: é onde dá para segurar.`);
+  tips.push(f.ps.result < 0 ? 'O mês fechou no negativo. O próximo começa com o teto já calculado sobre isso.' : 'O mês fechou no positivo. Vale mandar a sobra para a reserva.');
+  return `${pageHead(`${name} fechou`, `${L.ddmm(c.start)} a ${L.ddmm(c.end)} · ${esc(L.invoiceName(c, card(), today()).toLowerCase())}`, headActions({ upload: false }))}
+    <div class="dash fech">
+      <section class="kcard hero fech-hero">
+        <span class="r1"><span class="kl">Semanas dentro do teto</span><span class="wkdots" aria-hidden="true">${f.ws.map(w => `<i class="${w.spent <= w.limit + 0.5 ? 'ok' : 'bad'}"></i>`).join('')}</span></span>
+        <span class="kv">${f.ws.length ? `${f.inTeto.length} de ${f.ws.length}` : '—'}</span>
+        <span class="fh3"><span><small>Cartões</small><b>${rs(f.card)}</b></span><span><small>vs anterior</small><b class="${diff > 0 ? 'neg' : 'pos'}">${f.cardBefore > 0 ? (diff > 0 ? '+' : '−') + rs(Math.abs(diff)) : '—'}</b></span><span><small>Resultado</small><b class="${f.ps.result < 0 ? 'neg' : 'pos'}">${f.ps.result < 0 ? '−' : '+'}${rs(Math.abs(f.ps.result))}</b></span></span>
+      </section>
+      ${f.rows.length && f.hasAvg ? `<section class="card">
+        <div class="card-head"><h2>O que mudou contra a sua média</h2><span class="sub">dia a dia, sem parcelas, assinaturas e compras pontuais</span></div>
+        ${f.rows.map(r => `<div class="hbar"><div class="lab"><span>${esc(r.name)}</span><span class="${r.d > r.avg * 0.1 ? 'neg' : 'pos'}"><b>${r.d > 0 ? '+' : '−'}${money(Math.abs(r.d))}</b></span></div>
+          <div class="trk"><div class="val ${r.d > r.avg * 0.1 ? 'over' : ''}" style="width:${(r.v / max * 100).toFixed(1)}%"></div><div class="tick" style="left:${(r.avg / max * 100).toFixed(1)}%"></div></div></div>`).join('')}
+        <div class="legend" style="margin-top:6px"><span><span class="sw-bar"></span>Este mês</span><span><span class="sw-tick"></span>Média dos 3 anteriores</span></div>
+      </section>` : ''}
+      <section class="card">
+        <div class="card-head"><h2>Para o próximo mês</h2></div>
+        <p style="margin:0;line-height:1.55;color:var(--text-2)">${tips.join(' ')}</p>
+        <div class="actions no-print"><button class="btn small" data-act="fech-pdf">Salvar como PDF</button></div>
+      </section>
+    </div>`;
+}
+
 // ----- Assinaturas -----
 const subsOf = () => L.subscriptions({ txs: state.txs, rules: state.rules, settings: state.settings, cycle: curCycle(), today: today() });
 function subsLink(s) {
@@ -1528,6 +1669,11 @@ document.addEventListener('click', async e => {
     case 'batch-dismiss': state.lastBatch = null; return render();
     case 'upload': return pickFile();
     case 'domingo': return go('domingo');
+    case 'audit': return auditSheet(el.dataset.k);
+    case 'fech': return go('fechamento');
+    case 'fech-dismiss': try { localStorage.setItem('mf-mes-' + el.dataset.c, '1'); } catch (e2) {} { const y = window.scrollY; render(); window.scrollTo(0, y); } return;
+    case 'fech-pdf': return window.print();
+    case 'fut-sel': state.futSel = Number(el.dataset.i); { const y = window.scrollY; render(); window.scrollTo(0, y); } return;
     case 'subs': return go('assinaturas');
     case 'sub-cancel': {
       const k = el.dataset.k, list = new Set(state.settings.cancelSubs || []);
@@ -1789,7 +1935,7 @@ function pickFile() {
     if (f.size > 15e6) return toast('Arquivo grande demais para uma fatura.');
     let text;
     try {
-      if (/\.xlsx$/i.test(f.name)) { const X = await import('./xlsx.js?v=20261125e'); text = await X.xlsxToCSV(await f.arrayBuffer()); }
+      if (/\.xlsx$/i.test(f.name)) { const X = await import('./xlsx.js?v=20261125f'); text = await X.xlsxToCSV(await f.arrayBuffer()); }
       else if (/\.xls$/i.test(f.name)) return toast('Arquivo .xls antigo: abra no Excel e salve como .xlsx ou CSV.');
       else text = await f.text();
     } catch (err) { return toast('Não consegui ler o arquivo: ' + (err.message || err)); }
@@ -1866,6 +2012,7 @@ function uploadSheet(fileName, parsed) {
       state.lastBatch = b ? b.key : null;
       close();
       if (!['home', 'domingo'].includes(state.view)) go('home'); else render();
+      if (b && auditOf(b.key).length) setTimeout(() => auditSheet(b.key), 350);
       toast(`${fresh.length} ${fresh.length === 1 ? 'compra adicionada' : 'compras adicionadas'}${manualIds.length ? ` · ${manualIds.length} ${manualIds.length === 1 ? 'lançamento à mão substituído' : 'lançamentos à mão substituídos'}` : ''}.`);
     });
     update();
@@ -2155,6 +2302,7 @@ function menuSheet() {
   const html = `<h2>Mais</h2>
     <button class="row" data-go="domingo"><span>Fechar a semana</span><span class="end">›</span></button>
     <button class="row" data-go="assinaturas"><span>Assinaturas</span><span class="end">›</span></button>
+    <button class="row" data-go="fechamento"><span>Fechamento do mês</span><span class="end">›</span></button>
     <button class="row" data-go="reservas"><span>Reservas</span><span class="end">›</span></button>
     <button class="row" data-go="ajustes"><span>Ajustes e regras</span><span class="end">›</span></button>
     <div class="lbl" style="margin-top:16px">Tema</div>
