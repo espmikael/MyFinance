@@ -603,3 +603,34 @@ h1, h2, .page-title { text-wrap: balance; } p, .help, .ks { text-wrap: pretty; }
 
 /* barra lateral e abas: superfície limpa, sem moldura pesada */
 .side { box-shadow: 1px 0 0 var(--line); border-right-color: transparent; }
+
+/* ================= revisão 25/11 ================= */
+/* pendências: uma faixa só */
+.pend { display: flex; flex-wrap: wrap; gap: 8px; }
+.pend-i { display: inline-flex; align-items: center; gap: 8px; min-height: 40px; padding: 0 14px; border-radius: 999px; border: 1px solid var(--warn-line); background: var(--warn-soft); color: var(--warn); font-size: 14px; font-weight: 600; flex: 1 1 auto; }
+.pend-i .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--warn-fill); flex: none; } .pend-i .go { margin-left: auto; font-weight: 700; }
+.pend-i:active { transform: scale(.97); }
+/* resumo no celular: o saldo em cima, inteiro; entrada e fatura lado a lado */
+.only-mob .mini3 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.only-mob .mini3 > :first-child { grid-column: 1 / -1; flex-direction: row; flex-wrap: wrap; align-items: baseline; justify-content: space-between; column-gap: 12px; }
+.only-mob .mini3 > :first-child .kv { font-size: 20px; order: 2; } .only-mob .mini3 > :first-child .kl { order: 1; } .only-mob .mini3 > :first-child .ks { order: 3; flex-basis: 100%; }
+/* lista de gastos: ícone da rubrica */
+.tx .av svg { display: block; } .tx .av.unc { font-size: 15px; }
+.tx .c.unc { font-weight: 600; }
+/* gráfico: rótulo legível por cima da grade */
+svg text.halo { paint-order: stroke; stroke: var(--surface); stroke-width: 4px; stroke-linejoin: round; }
+/* card da semana no escuro: violeta escuro com contorno, em vez do lilás aceso */
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --ink: #2A2450; --ink-fg: #F2F3F5; --ink-over: #FF8A8E; } }
+:root[data-theme="dark"] { --ink: #2A2450; --ink-fg: #F2F3F5; --ink-over: #FF8A8E; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .kcard.hero, :root:not([data-theme="light"]) .kcard.hero.zero { background: var(--ink); color: var(--ink-fg); border: 1px solid rgba(164, 140, 245, .35); }
+  :root:not([data-theme="light"]) .kcard.hero .wday, :root:not([data-theme="light"]) .kcard.hero.zero .wday { background: rgba(255, 255, 255, .06); }
+  :root:not([data-theme="light"]) .kcard.hero .wday.past { background: rgba(0, 0, 0, .25); } :root:not([data-theme="light"]) .kcard.hero.zero .wday.past { background: rgba(255, 138, 142, .14); }
+  :root:not([data-theme="light"]) .kcard.hero .wday.today { background: rgba(164, 140, 245, .38); }
+  :root:not([data-theme="light"]) .kcard.hero .tagbtn, :root:not([data-theme="light"]) .kcard.hero.zero .tagbtn { background: rgba(255, 255, 255, .1); color: inherit; } }
+:root[data-theme="dark"] .kcard.hero, :root[data-theme="dark"] .kcard.hero.zero { background: var(--ink); color: var(--ink-fg); border: 1px solid rgba(164, 140, 245, .35); }
+:root[data-theme="dark"] .kcard.hero .wday, :root[data-theme="dark"] .kcard.hero.zero .wday { background: rgba(255, 255, 255, .06); }
+:root[data-theme="dark"] .kcard.hero .wday.past { background: rgba(0, 0, 0, .25); } :root[data-theme="dark"] .kcard.hero.zero .wday.past { background: rgba(255, 138, 142, .14); }
+:root[data-theme="dark"] .kcard.hero .wday.today { background: rgba(164, 140, 245, .38); }
+:root[data-theme="dark"] .kcard.hero .tagbtn, :root[data-theme="dark"] .kcard.hero.zero .tagbtn { background: rgba(255, 255, 255, .1); color: inherit; }
+.meter span.paused { background: var(--fixed-fill); }
+.pend { flex-wrap: nowrap; } .pend-i { flex: 1 1 0; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
